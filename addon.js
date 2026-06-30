@@ -227,7 +227,7 @@ const builder = new addon.addonBuilder({
     version     : '1.2.0',
     name        : 'LACartoons',
     description : 'Caricaturas y series animadas clasicas en Espanol Latino - lacartoons.com',
-    logo        : `${BASE_URL}/favicon.ico`,
+    logo        : `https://raw.githubusercontent.com/masilvasol/stremio-lacartoons/refs/heads/main/logo.png`,
     types       : ['series'],
     catalogs    : [{
         type  : 'series',
