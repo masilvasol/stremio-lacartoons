@@ -1,0 +1,374 @@
+'use strict';
+
+/**
+ * LACartoons Stremio Addon - v1.2.0
+ * Scraper para lacartoons.com con catalogo completo,
+ * temporadas multiples, ids de video conformes al protocolo Stremio,
+ * y extraccion de video via yt-dlp con headers de Referer para ok.ru.
+ */
+
+const express  = require('express');
+const addon    = require('stremio-addon-sdk');
+const axios    = require('axios');
+const cheerio  = require('cheerio');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const path     = require('path');
+
+const execAsync = promisify(exec);
+
+// ==================== Configuracion ====================
+const BASE_URL = 'https://lacartoons.com';
+const YT_DLP   = path.resolve(__dirname, 'yt-dlp.exe');
+const PORT     = 7000;
+
+// Headers que ok.ru / okcdn.ru exige para permitir la reproduccion
+const OKRU_HEADERS = {
+    'Referer'    : 'https://ok.ru/',
+    'Origin'     : 'https://ok.ru',
+    'User-Agent' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+};
+
+// Hosts de video que buscamos en el iframe
+const VIDEO_HOSTS = [
+    'ok.ru', 'odnoklassniki', 'vk.com',
+    'youtube.com', 'youtu.be',
+    'dailymotion.com', 'vimeo.com',
+    'streamtape', 'doodstream', 'player'
+];
+
+// ==================== HTTP Client ====================
+const HTTP = axios.create({
+    timeout: 20000,
+    headers: {
+        'User-Agent'      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept'          : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language' : 'es-ES,es;q=0.9,en;q=0.8',
+        'Referer'         : BASE_URL,
+    }
+});
+
+// ==================== Cache en memoria (TTL = 2 horas) ====================
+const CACHE     = new Map();
+const CACHE_TTL = 2 * 60 * 60 * 1000;
+
+// fetchHTML con reintentos: si el sitio bloquea o falla de forma transitoria
+// (403/429/timeout), reintenta hasta 3 veces con backoff antes de fallar.
+async function fetchHTML(url, attempt = 1) {
+    const now = Date.now();
+    if (CACHE.has(url)) {
+        const entry = CACHE.get(url);
+        if (now - entry.ts < CACHE_TTL) return entry.data;
+    }
+    try {
+        const { data } = await HTTP.get(url);
+        CACHE.set(url, { data, ts: now });
+        return data;
+    } catch (e) {
+        const status = e.response ? e.response.status : null;
+        const transient = status === 403 || status === 429 || !status;
+        if (attempt < 3 && transient) {
+            await new Promise(r => setTimeout(r, 800 * attempt));
+            return fetchHTML(url, attempt + 1);
+        }
+        throw e;
+    }
+}
+
+// ==================== Pre-carga del catalogo completo ====================
+let catalogCache = null;
+
+async function buildFullCatalog() {
+    if (catalogCache) return catalogCache;
+
+    const firstHTML  = await fetchHTML(`${BASE_URL}/?page=1`);
+    const $first     = cheerio.load(firstHTML);
+    const pageNums   = [];
+    $first('a[href*="?page="]').each((_, el) => {
+        const m = ($first(el).attr('href') || '').match(/\?page=(\d+)/);
+        if (m) pageNums.push(parseInt(m[1]));
+    });
+    const totalPages = pageNums.length ? Math.max(...pageNums) : 1;
+    console.log('[CATALOGO] Detectadas ' + totalPages + ' paginas.');
+
+    const allMetas = [];
+    const seenIds  = new Set();
+
+    // Concurrencia reducida (3 a la vez) + pequena pausa entre lotes,
+    // para no disparar limites anti-bot del sitio durante el arranque.
+    for (let i = 0; i < totalPages; i += 3) {
+        const batch = [];
+        for (let p = i + 1; p <= Math.min(i + 3, totalPages); p++) {
+            batch.push(fetchHTML(`${BASE_URL}/?page=${p}`));
+        }
+        const pages = await Promise.allSettled(batch);
+
+        for (const result of pages) {
+            if (result.status !== 'fulfilled') continue;
+            const $ = cheerio.load(result.value);
+
+            $('a[href]').each((_, el) => {
+                const href  = $(el).attr('href') || '';
+                const match = href.match(/\/serie\/(\d+)$/);
+                if (!match) return;
+
+                const numId = match[1];
+                if (seenIds.has(numId)) return;
+                seenIds.add(numId);
+
+                let poster = $(el).find('img').first().attr('src') || '';
+                if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
+
+                const raw  = $(el).text().trim();
+                const name = raw.replace(/\s+\d{4}\s+\d+\s*$/, '').trim() || ('Serie ' + numId);
+
+                if (!name) return;
+
+                allMetas.push({
+                    id     : 'lacart_' + numId,
+                    type   : 'series',
+                    name,
+                    poster : poster || undefined,
+                });
+            });
+        }
+
+        await new Promise(r => setTimeout(r, 300));
+    }
+
+    catalogCache = allMetas;
+    console.log('[CATALOGO] ' + allMetas.length + ' series cargadas.');
+    return allMetas;
+}
+
+// ==================== Detalle de serie (nombre, poster, episodios) ====================
+// Cacheado por separado: meta handler y stream handler comparten esta info,
+// asi el stream handler puede resolver "temporada/episodio" -> URL real
+// sin tener que re-scrapear todo de nuevo.
+const seriesDetailCache = new Map();
+const DETAIL_TTL = 2 * 60 * 60 * 1000;
+
+function extractEpisodesFromPage($) {
+    const episodes      = [];
+    const epPerSeason   = {};
+    let   currentSeason = 1;
+
+    // Recorremos en orden DOM: h4 (temporada) y los enlaces de capitulos
+    $('h4, a[href*="/capitulo/"]').each((_, el) => {
+        const tag = el.name;
+
+        if (tag === 'h4') {
+            const text = $(el).text().trim();
+            const m    = text.match(/[Tt]emporada\s+(\d+)/);
+            if (m) currentSeason = parseInt(m[1]);
+            return;
+        }
+
+        const href = $(el).attr('href') || '';
+        if (!href.includes('/capitulo/')) return;
+
+        epPerSeason[currentSeason] = (epPerSeason[currentSeason] || 0) + 1;
+
+        // epPath normalizado (relativo), funciona con href absoluto o relativo
+        const epPath = href.startsWith('/') ? href : ('/' + href.split('/').slice(3).join('/'));
+
+        episodes.push({
+            season  : currentSeason,
+            episode : epPerSeason[currentSeason],
+            title   : $(el).text().trim() || ('Episodio ' + epPerSeason[currentSeason]),
+            epPath,
+        });
+    });
+
+    return episodes;
+}
+
+async function getSeriesDetail(numId) {
+    const now = Date.now();
+    if (seriesDetailCache.has(numId)) {
+        const entry = seriesDetailCache.get(numId);
+        if (now - entry.ts < DETAIL_TTL) return entry.data;
+    }
+
+    const html = await fetchHTML(`${BASE_URL}/serie/${numId}`);
+    const $    = cheerio.load(html);
+
+    const name = $('h2').first().text().trim() || ('Serie ' + numId);
+
+    let poster = '';
+    $('img[src*="active_storage"]').each((_, el) => {
+        if (!poster) {
+            const src = $(el).attr('src') || '';
+            poster = src.startsWith('http') ? src : `${BASE_URL}${src}`;
+        }
+    });
+
+    const description = $('p')
+        .map((_, el) => $(el).text().trim())
+        .get()
+        .find(t => t.length > 30) || '';
+
+    // Ano de la serie, usado solo para fabricar fechas "released" validas
+    // (Stremio exige ISO 8601 en cada video, aunque no sea la fecha real de emision)
+    const bodyText  = $('body').text();
+    const yearMatch = bodyText.match(/A[nñ]o:\s*(\d{4})/);
+    const baseYear  = yearMatch ? parseInt(yearMatch[1]) : 2000;
+
+    const episodes = extractEpisodesFromPage($);
+
+    const detail = { name, poster, description, baseYear, episodes };
+    seriesDetailCache.set(numId, { data: detail, ts: now });
+    return detail;
+}
+
+// ==================== Manifest ====================
+const builder = new addon.addonBuilder({
+    id          : 'org.lacartoons.addon',
+    version     : '1.2.0',
+    name        : 'LACartoons',
+    description : 'Caricaturas y series animadas clasicas en Espanol Latino - lacartoons.com',
+    logo        : `${BASE_URL}/favicon.ico`,
+    types       : ['series'],
+    catalogs    : [{
+        type  : 'series',
+        id    : 'lacart_catalogo',
+        name  : 'LACartoons',
+        extra : [{ name: 'skip', isRequired: false }],
+    }],
+    resources   : ['catalog', 'meta', 'stream'],
+    idPrefixes  : ['lacart_'],
+});
+
+// ==================== 1. CATALOGO ====================
+builder.defineCatalogHandler(async ({ extra }) => {
+    try {
+        const skip      = parseInt((extra && extra.skip) || 0);
+        const PAGE_SIZE = 20;
+        const all       = await buildFullCatalog();
+        return { metas: all.slice(skip, skip + PAGE_SIZE) };
+    } catch (e) {
+        console.error('[CATALOGO ERROR]', e.message);
+        return { metas: [] };
+    }
+});
+
+// ==================== 2. METADATOS ====================
+builder.defineMetaHandler(async ({ id }) => {
+    const numId = id.replace('lacart_', '');
+    if (!/^\d+$/.test(numId)) return { meta: null };
+
+    try {
+        const { name, poster, description, baseYear, episodes } = await getSeriesDetail(numId);
+
+        if (!episodes.length) {
+            console.warn('[META] Sin episodios detectados para serie ' + numId);
+        }
+
+        // video.id sigue el formato oficial del protocolo Stremio: metaId:temporada:episodio
+        // video.released es obligatorio (ISO 8601); fabricamos fechas secuenciales validas
+        const videos = episodes.map((ep, idx) => ({
+            id       : `lacart_${numId}:${ep.season}:${ep.episode}`,
+            title    : ep.title,
+            season   : ep.season,
+            episode  : ep.episode,
+            released : new Date(baseYear, 0, 1 + idx).toISOString(),
+        }));
+
+        return {
+            meta: { id, type: 'series', name, poster, description, videos }
+        };
+    } catch (e) {
+        console.error('[META ERROR]', e.message);
+        return { meta: null };
+    }
+});
+
+// ==================== 3. STREAM ====================
+builder.defineStreamHandler(async ({ id }) => {
+    // Formato esperado: lacart_{numId}:{temporada}:{episodio}
+    const m = id.match(/^lacart_(\d+):(\d+):(\d+)$/);
+    if (!m) return { streams: [] };
+
+    const numId  = m[1];
+    const season = parseInt(m[2]);
+    const episode = parseInt(m[3]);
+
+    try {
+        const { episodes } = await getSeriesDetail(numId);
+        const match = episodes.find(e => e.season === season && e.episode === episode);
+
+        if (!match) {
+            console.warn(`[STREAM] No se encontro S${season}E${episode} para serie ${numId}`);
+            return { streams: [] };
+        }
+
+        const epUrl = match.epPath.startsWith('http') ? match.epPath : `${BASE_URL}${match.epPath}`;
+        const html  = await fetchHTML(epUrl);
+        const $     = cheerio.load(html);
+
+        let iframeSrc = null;
+        $('iframe[src]').each((_, el) => {
+            if (iframeSrc) return;
+            const src = $(el).attr('src') || '';
+            if (VIDEO_HOSTS.some(h => src.includes(h))) {
+                iframeSrc = src.startsWith('http') ? src : `${BASE_URL}${src}`;
+            }
+        });
+
+        if (!iframeSrc) {
+            console.warn('[STREAM] No se encontro iframe en:', epUrl);
+            return { streams: [] };
+        }
+
+        console.log('[STREAM] Extrayendo URL de:', iframeSrc);
+
+        const { stdout, stderr } = await execAsync(
+            `"${YT_DLP}" -g --no-playlist -f "best[height<=720]/best" "${iframeSrc}"`,
+            { timeout: 30000 }
+        );
+
+        if (stderr) console.warn('[YT-DLP WARN]', stderr.slice(0, 200));
+
+        const videoUrl = stdout.split('\n').map(l => l.trim()).find(Boolean);
+        if (!videoUrl) {
+            console.warn('[STREAM] yt-dlp no devolvio URL.');
+            return { streams: [] };
+        }
+
+        console.log('[STREAM] URL final:', videoUrl);
+
+        return {
+            streams: [{
+                name  : 'LACartoons',
+                title : 'HD',
+                url   : videoUrl,
+                behaviorHints: {
+                    notWebReady: true,
+                    proxyHeaders: {
+                        request: OKRU_HEADERS,
+                    },
+                },
+            }]
+        };
+    } catch (e) {
+        console.error('[STREAM ERROR]', e.message);
+        return { streams: [] };
+    }
+});
+
+// ==================== Servidor ====================
+const app = express();
+app.use(addon.getRouter(builder.getInterface()));
+
+app.listen(PORT, () => {
+    console.log('');
+    console.log('================================================');
+    console.log('         LACartoons Addon  v1.2.0');
+    console.log('  http://127.0.0.1:' + PORT + '/manifest.json');
+    console.log('================================================');
+    console.log('');
+
+    buildFullCatalog()
+        .then(s => console.log('[OK] Catalogo listo: ' + s.length + ' series disponibles.'))
+        .catch(e => console.error('[WARN] Error pre-cargando catalogo:', e.message));
+});

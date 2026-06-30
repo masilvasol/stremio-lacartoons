@@ -1,0 +1,25 @@
+{
+  "name": "lacartoons-addon",
+  "version": "1.1.0",
+  "description": "Addon de Stremio para ver caricaturas clásicas de lacartoons.com en Español Latino.",
+  "main": "addon.js",
+  "scripts": {
+    "start": "node addon.js"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "caricaturas",
+    "cartoons",
+    "español"
+  ],
+  "author": "Miguel Silva",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.18.1",
+    "cheerio": "^1.2.0",
+    "express": "^5.2.1",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
