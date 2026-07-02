@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * LACartoons Stremio Addon - v1.2.0
+ * LACartoons Stremio Addon - v1.2.1
  * Scraper para lacartoons.com con catalogo completo,
  * temporadas multiples, ids de video conformes al protocolo Stremio,
  * y extraccion de video via yt-dlp con headers de Referer para ok.ru.
