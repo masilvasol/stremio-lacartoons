@@ -22,12 +22,58 @@ const BASE_URL = 'https://lacartoons.com';
 const YT_DLP   = path.resolve(__dirname, 'yt-dlp.exe');
 const PORT     = 7000;
 
+// URL base del addon para reescribir playlists del proxy HLS.
+// Por defecto usa localhost; sobreescribible con PUBLIC_URL si se expone
+// el addon en otra red (p. ej. IP LAN para TV o movil).
+const PUBLIC_URL = (process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`)
+    .replace(/\/+$/, '');
+
 // Headers que ok.ru / okcdn.ru exige para permitir la reproduccion
 const OKRU_HEADERS = {
     'Referer'    : 'https://ok.ru/',
     'Origin'     : 'https://ok.ru',
     'User-Agent' : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 };
+
+const b64urlEncode = s => Buffer.from(s, 'utf8').toString('base64url');
+const b64urlDecode = s => Buffer.from(s, 'base64url').toString('utf8');
+
+// Construye una URL del proxy HLS. `kind` es 'm3u8' (lista) o 'ts' (segmento).
+function proxyUrl(targetUrl, kind) {
+    return `${PUBLIC_URL}/p/${b64urlEncode(targetUrl)}.${kind}`;
+}
+
+/** Extrae streams HLS de ok.ru via yt-dlp (JSON) y los enruta por el proxy. */
+async function extractOkRuStreams(iframeSrc) {
+    const { stdout, stderr } = await execAsync(
+        `"${YT_DLP}" -J --no-playlist "${iframeSrc}"`,
+        { timeout: 30000 }
+    );
+    if (stderr) console.warn('[YT-DLP WARN]', stderr.slice(0, 200));
+
+    const info = JSON.parse(stdout);
+    const seen = new Set();
+
+    return (info.formats || [])
+        .filter(f => f.protocol === 'm3u8_native' && f.url && f.height)
+        .sort((a, b) => (b.height || 0) - (a.height || 0))
+        .filter(f => {
+            if (f.height > 720 || seen.has(f.height)) return false;
+            seen.add(f.height);
+            return true;
+        })
+        .map(f => ({
+            name  : 'LACartoons',
+            title : `${f.height}p`,
+            // Servimos la lista de reproduccion via nuestro proxy: reescribe
+            // los segmentos y añade las cabeceras de ok.ru + CORS, de modo que
+            // el stream sea reproducible en cualquier cliente, incluida la web.
+            url   : proxyUrl(f.url, 'm3u8'),
+            behaviorHints: {
+                bingeGroup: 'lacartoons-hls',
+            },
+        }));
+}
 
 // Hosts de video que buscamos en el iframe
 const VIDEO_HOSTS = [
@@ -322,34 +368,14 @@ builder.defineStreamHandler(async ({ id }) => {
 
         console.log('[STREAM] Extrayendo URL de:', iframeSrc);
 
-        const { stdout, stderr } = await execAsync(
-            `"${YT_DLP}" -g --no-playlist -f "best[height<=720]/best" "${iframeSrc}"`,
-            { timeout: 30000 }
-        );
-
-        if (stderr) console.warn('[YT-DLP WARN]', stderr.slice(0, 200));
-
-        const videoUrl = stdout.split('\n').map(l => l.trim()).find(Boolean);
-        if (!videoUrl) {
-            console.warn('[STREAM] yt-dlp no devolvio URL.');
+        const streams = await extractOkRuStreams(iframeSrc);
+        if (!streams.length) {
+            console.warn('[STREAM] yt-dlp no devolvio streams HLS.');
             return { streams: [] };
         }
 
-        console.log('[STREAM] URL final:', videoUrl);
-
-        return {
-            streams: [{
-                name  : 'LACartoons',
-                title : 'HD',
-                url   : videoUrl,
-                behaviorHints: {
-                    notWebReady: true,
-                    proxyHeaders: {
-                        request: OKRU_HEADERS,
-                    },
-                },
-            }]
-        };
+        console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
+        return { streams };
     } catch (e) {
         console.error('[STREAM ERROR]', e.message);
         return { streams: [] };
@@ -358,6 +384,87 @@ builder.defineStreamHandler(async ({ id }) => {
 
 // ==================== Servidor ====================
 const app = express();
+
+// -------------------- Proxy HLS --------------------
+// ok.ru/okcdn.ru exige cabeceras (Referer/Origin) y no envia CORS, por lo que
+// el navegador (Stremio Web) no puede reproducir sus streams directamente.
+// Este proxy: (1) descarga listas y segmentos con las cabeceras correctas,
+// (2) reescribe las URLs internas para que pasen tambien por el proxy, y
+// (3) añade cabeceras CORS. Asi el stream funciona en PC, TV, movil y web.
+
+function setCors(res) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+}
+
+// Reescribe una playlist m3u8: cada URI hija se re-enruta por el proxy.
+function rewritePlaylist(text, baseUrl) {
+    const isMaster = text.includes('#EXT-X-STREAM-INF');
+    const childKind = isMaster ? 'm3u8' : 'ts';
+
+    return text.split(/\r?\n/).map(line => {
+        const trimmed = line.trim();
+        if (!trimmed) return line;
+
+        if (trimmed.startsWith('#')) {
+            // Reescribe URIs embebidas (p.ej. claves de cifrado EXT-X-KEY).
+            return line.replace(/URI="([^"]+)"/g, (_, uri) => {
+                const abs = new URL(uri, baseUrl).href;
+                return `URI="${proxyUrl(abs, 'ts')}"`;
+            });
+        }
+
+        const abs = new URL(trimmed, baseUrl).href;
+        return proxyUrl(abs, childKind);
+    }).join('\n');
+}
+
+app.options('/p/:enc', (req, res) => { setCors(res); res.sendStatus(204); });
+
+app.get('/p/:enc', async (req, res) => {
+    const raw = req.params.enc;
+    const isPlaylist = raw.endsWith('.m3u8');
+    const enc = raw.replace(/\.(m3u8|ts)$/, '');
+
+    let targetUrl;
+    try {
+        targetUrl = b64urlDecode(enc);
+    } catch {
+        return res.status(400).send('bad url');
+    }
+
+    try {
+        const upstream = await axios.get(targetUrl, {
+            headers: OKRU_HEADERS,
+            responseType: 'arraybuffer',
+            timeout: 20000,
+            maxRedirects: 5,
+            validateStatus: () => true,
+        });
+
+        if (upstream.status >= 400) {
+            return res.status(upstream.status).end();
+        }
+
+        setCors(res);
+        const ct = upstream.headers['content-type'] || '';
+
+        if (isPlaylist || ct.includes('mpegurl')) {
+            const body = Buffer.from(upstream.data).toString('utf8');
+            const rewritten = rewritePlaylist(body, targetUrl);
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            return res.send(rewritten);
+        }
+
+        res.setHeader('Content-Type', ct || 'video/mp2t');
+        return res.send(Buffer.from(upstream.data));
+    } catch (e) {
+        console.error('[PROXY ERROR]', e.message);
+        return res.status(502).end();
+    }
+});
+
 app.use(addon.getRouter(builder.getInterface()));
 
 app.listen(PORT, () => {
