@@ -75,12 +75,35 @@ async function extractOkRuStreams(iframeSrc) {
         }));
 }
 
+/** Extrae IDs de videos de YouTube de las URL y formatea los streams */
+async function extractYouTubeStreams(iframeSrc) {
+    try {
+        const ytURL = new URL(iframeSrc);
+        let ytId = ytURL.searchParams.get('v') || ytURL.pathname.split('/').pop();
+        return [{
+            name  : 'LACartoons',
+            title : 'YouTube',
+            ytId,
+            behaviorHints: {
+                bingeGroup: 'lacartoons-yt',
+            },
+        }]
+    } catch (e) {
+        console.warn('[STREAM] URL de YouTube invalida:', iframeSrc);
+        return []
+    }
+}
+
 // Hosts de video que buscamos en el iframe
 const VIDEO_HOSTS = [
     'ok.ru', 'odnoklassniki', 'vk.com',
     'youtube.com', 'youtu.be',
     'dailymotion.com', 'vimeo.com',
     'streamtape', 'doodstream', 'player'
+];
+
+const YT_HOSTS = [
+    'youtube.com', 'youtu.be'
 ];
 
 // ==================== HTTP Client ====================
@@ -366,15 +389,27 @@ builder.defineStreamHandler(async ({ id }) => {
             return { streams: [] };
         }
 
-        console.log('[STREAM] Extrayendo URL de:', iframeSrc);
+        if (YT_HOSTS.some(h => iframeSrc.includes(h))) {
+            console.log('[STREAM] Extrayendo URL de YouTube:', iframeSrc);
 
-        const streams = await extractOkRuStreams(iframeSrc);
-        if (!streams.length) {
-            console.warn('[STREAM] yt-dlp no devolvio streams HLS.');
-            return { streams: [] };
+            const streams = await extractYouTubeStreams(iframeSrc);
+            if (!streams.length) {
+                console.warn('[STREAM] No se pudo extraer la ID del video de YouTube.');
+                return { streams: [] };
+            }
+
+            console.log('[STREAM] Streams YT:', streams.map(s => s.title).join(', '));
+        } else {
+            console.log('[STREAM] Extrayendo URL de:', iframeSrc);
+
+            const streams = await extractOkRuStreams(iframeSrc);
+            if (!streams.length) {
+                console.warn('[STREAM] yt-dlp no devolvio streams HLS.');
+                return { streams: [] };
+            }
+
+            console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
         }
-
-        console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
         return { streams };
     } catch (e) {
         console.error('[STREAM ERROR]', e.message);
