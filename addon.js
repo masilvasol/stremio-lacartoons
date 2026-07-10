@@ -272,6 +272,17 @@ async function getSeriesDetail(numId) {
         }
     });
 
+    let network = $('span.marcador').first().text().trim() || '';
+    let genres, links;
+    if (network) {
+        genres = [network];
+        let networkCat = `stremio:///discover/${encodeURIComponent(`${PUBLIC_URL}/manifest.json`)}/series/lacart_catalogo?genre=${encodeURIComponent(network)}`
+        links = [
+            {category: "Cadena", name: network, url: networkCat},
+            {category: "Genres", name: network, url: networkCat}
+        ]
+    }
+
     const description = $('p')
         .map((_, el) => $(el).text().trim())
         .get()
@@ -285,7 +296,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes };
+    const detail = { name, poster, description, baseYear, episodes, genres, links };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -331,7 +342,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes } = await getSeriesDetail(numId);
+        const { name, poster, description, baseYear, episodes, genres, links } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -348,7 +359,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos }
+            meta: { id, type: 'series', name, poster, description, videos, genres, links }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
