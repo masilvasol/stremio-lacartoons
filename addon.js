@@ -176,7 +176,7 @@ async function buildFullCatalog() {
                 let poster = $(el).find('img').first().attr('src') || '';
                 if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
 
-                let network = $(el).find('span.marcadorSeries').first().text().trim() || '';
+                let network = $(el).find('span.marcador').first().text().trim() || '';
                 let genres, links;
                 if (network) {
                     genres = [network];
@@ -302,7 +302,7 @@ const builder = new addon.addonBuilder({
         type  : 'series',
         id    : 'lacart_catalogo',
         name  : 'LACartoons',
-        extra : [{ name: 'skip', isRequired: false }, { name: 'genre', isRequired: false, options: NETWORK_ENUM.keys() }],
+        extra : [{ name: 'skip', isRequired: false }, { name: 'genre', isRequired: false, options: Object.keys(NETWORK_ENUM) }],
     }],
     resources   : ['catalog', 'meta', 'stream'],
     idPrefixes  : ['lacart_'],
