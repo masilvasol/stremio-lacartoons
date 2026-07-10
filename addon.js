@@ -43,6 +43,17 @@ function proxyUrl(targetUrl, kind) {
     return `${PUBLIC_URL}/p/${b64urlEncode(targetUrl)}.${kind}`;
 }
 
+const NETWORK_ENUM = Object.freeze({
+    Nickelodeon: 1,
+    "Cartoon Network": 2,
+    "Fox Kids": 3,
+    "Hannah Barbera": 4,
+    Disney: 5,
+    "Warner Channel": 6,
+    Marvel: 7,
+    Otros: 8
+})
+
 /** Extrae streams HLS de ok.ru via yt-dlp (JSON) y los enruta por el proxy. */
 async function extractOkRuStreams(iframeSrc) {
     const { stdout, stderr } = await execAsync(
@@ -165,8 +176,18 @@ async function buildFullCatalog() {
                 let poster = $(el).find('img').first().attr('src') || '';
                 if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
 
-                const raw  = $(el).text().trim();
-                const name = raw.replace(/\s+\d{4}\s+\d+\s*$/, '').trim() || ('Serie ' + numId);
+                let network = $(el).find('span.marcadorSeries').first().text().trim() || '';
+                let genres, links;
+                if (network) {
+                    genres = [network];
+                    let networkCat = `stremio:///discover/${encodeURIComponent(`${PUBLIC_URL}/manifest.json`)}/series/lacart_catalogo?genre=${encodeURIComponent(network)}`
+                    links = [
+                        {category: "Cadena", name: network, url: networkCat},
+                        {category: "Genres", name: network, url: networkCat}
+                    ]
+                }
+
+                const name = $(el).find('p.nombre-serie').text().trim() || ('Serie ' + numId);
 
                 if (!name) return;
 
@@ -175,6 +196,8 @@ async function buildFullCatalog() {
                     type   : 'series',
                     name,
                     poster : poster || undefined,
+                    genres,
+                    links
                 });
             });
         }
@@ -279,7 +302,7 @@ const builder = new addon.addonBuilder({
         type  : 'series',
         id    : 'lacart_catalogo',
         name  : 'LACartoons',
-        extra : [{ name: 'skip', isRequired: false }],
+        extra : [{ name: 'skip', isRequired: false }, { name: 'genre', isRequired: false, options: NETWORK_ENUM.keys() }],
     }],
     resources   : ['catalog', 'meta', 'stream'],
     idPrefixes  : ['lacart_'],
@@ -289,8 +312,12 @@ const builder = new addon.addonBuilder({
 builder.defineCatalogHandler(async ({ extra }) => {
     try {
         const skip      = parseInt((extra && extra.skip) || 0);
+        const genre     = extra?.genre ? decodeURIComponent(extra.genre) : null;
         const PAGE_SIZE = 20;
-        const all       = await buildFullCatalog();
+        const all       = await buildFullCatalog().then(list => {
+            if (!genre) return list;
+            return list.filter(m => m.genres && m.genres.includes(genre));
+        });
         return { metas: all.slice(skip, skip + PAGE_SIZE) };
     } catch (e) {
         console.error('[CATALOGO ERROR]', e.message);
