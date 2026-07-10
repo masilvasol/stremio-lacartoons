@@ -256,7 +256,7 @@ async function getSeriesDetail(numId) {
         if (!match) return;
         const numRel = match[1];
         links.push({
-            category: $('h3.subtitulo-linea').text().trim() || 'Series recomendadas',
+            category: $('h3.subtitulo-linea').filter((_, el) => $(el).text().includes('ecomend')).text().trim() || 'Series recomendadas',
             name: $(el).find('p.nombre-serie').first().text().trim() || ('Serie ' + numRel),
             url: `stremio:///detail/series/lacart_${numRel}`
         })
