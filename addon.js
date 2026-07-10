@@ -121,13 +121,7 @@ async function fetchHTML(url, attempt = 1) {
     }
 }
 
-// ==================== Pre-carga del catalogo completo ====================
-let catalogCache = null;
-
-async function buildFullCatalog() {
-    if (catalogCache) return catalogCache;
-
-    const firstHTML  = await fetchHTML(`${BASE_URL}/?page=1`);
+async function processCatalogPage(html) {
     const $first     = cheerio.load(firstHTML);
     const pageNums   = [];
     $first('a[href*="?page="]').each((_, el) => {
@@ -182,9 +176,33 @@ async function buildFullCatalog() {
         await new Promise(r => setTimeout(r, 300));
     }
 
+    return allMetas;
+}
+
+// ==================== Pre-carga del catalogo completo ====================
+let catalogCache = null;
+
+async function buildFullCatalog() {
+    if (catalogCache) return catalogCache;
+
+    const firstHTML  = await fetchHTML(`${BASE_URL}/?page=1`);
+    
+    const allMetas = await processCatalogPage(firstHTML);
+
     catalogCache = allMetas;
     console.log('[CATALOGO] ' + allMetas.length + ' series cargadas.');
     return allMetas;
+}
+
+async function searchCatalog(searchTerm) {
+    searchTerm = searchTerm.trim().replaceAll(" ", "+").replaceAll(encodeURIComponent(" "), "+");
+
+    const firstHTML  = await fetchHTML(`${BASE_URL}/?Titulo=${searchTerm}`);
+    
+    const matchedMetas = await processCatalogPage(firstHTML);
+
+    console.log('[CATALOGO] ' + matchedMetas.length + ' series encontradas.');
+    return matchedMetas;
 }
 
 // ==================== Detalle de serie (nombre, poster, episodios) ====================
@@ -279,7 +297,7 @@ const builder = new addon.addonBuilder({
         type  : 'series',
         id    : 'lacart_catalogo',
         name  : 'LACartoons',
-        extra : [{ name: 'skip', isRequired: false }],
+        extra : [{ name: 'skip', isRequired: false }, { name: 'search', isRequired: false }],
     }],
     resources   : ['catalog', 'meta', 'stream'],
     idPrefixes  : ['lacart_'],
@@ -288,10 +306,14 @@ const builder = new addon.addonBuilder({
 // ==================== 1. CATALOGO ====================
 builder.defineCatalogHandler(async ({ extra }) => {
     try {
-        const skip      = parseInt((extra && extra.skip) || 0);
-        const PAGE_SIZE = 20;
-        const all       = await buildFullCatalog();
-        return { metas: all.slice(skip, skip + PAGE_SIZE) };
+        if (extra && extra.search) {
+            return { metas: await searchCatalog(extra.search) };
+        } else {
+            const skip      = parseInt((extra && extra.skip) || 0);
+            const PAGE_SIZE = 20;
+            const all       = await buildFullCatalog();
+            return { metas: all.slice(skip, skip + PAGE_SIZE) };
+        }
     } catch (e) {
         console.error('[CATALOGO ERROR]', e.message);
         return { metas: [] };
