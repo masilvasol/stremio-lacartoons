@@ -249,6 +249,8 @@ async function getSeriesDetail(numId) {
         }
     });
 
+    let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
+
     const description = $('p')
         .map((_, el) => $(el).text().trim())
         .get()
@@ -262,7 +264,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes };
+    const detail = { name, poster, description, baseYear, episodes, language };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -304,7 +306,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes } = await getSeriesDetail(numId);
+        const { name, poster, description, baseYear, episodes, language } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -321,7 +323,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos }
+            meta: { id, type: 'series', name, poster, description, videos, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
