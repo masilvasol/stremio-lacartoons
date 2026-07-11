@@ -262,7 +262,7 @@ async function getSeriesDetail(numId) {
     const name = $('h2').first().text().trim() || ('Serie ' + numId);
 
     let poster = '';
-    $('img[src*="active_storage"]').each((_, el) => {
+    $('.imagen-serie > img[src*="active_storage"]').each((_, el) => {
         if (!poster) {
             const src = $(el).attr('src') || '';
             poster = src.startsWith('http') ? src : `${BASE_URL}${src}`;
@@ -270,6 +270,9 @@ async function getSeriesDetail(numId) {
     });
 
     let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
+
+    let background = $('img.fondo-serie-seccion[src*="active_storage"]')?.first()?.attr('src');
+    if(background && !background.startsWith('http')) background = `${BASE_URL}${background}`;
 
     let links = [];
     $('div.series-recomendadas').each((_, el) => {
@@ -297,7 +300,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes, links, language };
+    const detail = { name, poster, background, description, baseYear, episodes, links, language };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -343,7 +346,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes, links, language } = await getSeriesDetail(numId);
+        const { name, poster, background, description, baseYear, episodes, links, language } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -360,7 +363,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos, links, language }
+            meta: { id, type: 'series', name, poster, background, description, videos, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
