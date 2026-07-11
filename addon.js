@@ -271,6 +271,19 @@ async function getSeriesDetail(numId) {
 
     let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
 
+    let links = [];
+    $('div.series-recomendadas').each((_, el) => {
+        const href  = $(el).find('a').first().attr('href') || '';
+        const match = href?.match(/\/serie\/(\d+)$/);
+        if (!match) return;
+        const numRel = match[1];
+        links.push({
+            category: $('h3.subtitulo-linea').filter((_, el) => $(el).text().includes('ecomend')).text().trim() || 'Series recomendadas',
+            name: $(el).find('p.nombre-serie').first().text().trim() || ('Serie ' + numRel),
+            url: `stremio:///detail/series/lacart_${numRel}`
+        })
+    })
+
     const description = $('p')
         .map((_, el) => $(el).text().trim())
         .get()
@@ -284,7 +297,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes, language };
+    const detail = { name, poster, description, baseYear, episodes, links, language };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -330,7 +343,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes, language } = await getSeriesDetail(numId);
+        const { name, poster, description, baseYear, episodes, links, language } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -347,7 +360,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos, language }
+            meta: { id, type: 'series', name, poster, description, videos, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
