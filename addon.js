@@ -292,15 +292,27 @@ async function getSeriesDetail(numId) {
 
     let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
 
+    let links = [], genres;
+    $('div.series-recomendadas').each((_, el) => {
+        const href  = $(el).find('a').first().attr('href') || '';
+        const match = href?.match(/\/serie\/(\d+)$/);
+        if (!match) return;
+        const numRel = match[1];
+        links.push({
+            category: $('h3.subtitulo-linea').filter((_, el) => $(el).text().includes('ecomend')).text().trim() || 'Series recomendadas',
+            name: $(el).find('p.nombre-serie').first().text().trim() || ('Serie ' + numRel),
+            url: `stremio:///detail/series/lacart_${numRel}`
+        })
+    })
+
     let network = $('span.marcador').first().text().trim() || '';
-    let genres, links;
     if (network) {
         genres = [network];
         let networkCat = `stremio:///discover/${encodeURIComponent(`${PUBLIC_URL}/manifest.json`)}/series/lacart_catalogo?genre=${encodeURIComponent(network)}`
-        links = [
+        links.push(
             {category: "Cadena", name: network, url: networkCat},
             {category: "Genres", name: network, url: networkCat}
-        ]
+        )
     }
 
     const description = $('p')
