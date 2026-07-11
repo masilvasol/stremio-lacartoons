@@ -121,6 +121,38 @@ async function fetchHTML(url, attempt = 1) {
     }
 }
 
+function processCatalogPage(html, seenIds=new Set()) {
+    const metas = [];
+
+    const $ = cheerio.load(html);
+
+    $('a[href]').each((_, el) => {
+        const href  = $(el).attr('href') || '';
+        const match = href.match(/\/serie\/(\d+)$/);
+        if (!match) return;
+
+        const numId = match[1];
+        if (seenIds.has(numId)) return;
+        seenIds.add(numId);
+
+        let poster = $(el).find('img').first().attr('src') || '';
+        if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
+
+        const raw  = $(el).text().trim();
+        const name = raw.replace(/\s+\d{4}\s+\d+\s*$/, '').trim() || ('Serie ' + numId);
+
+        if (!name) return;
+
+        metas.push({
+            id     : 'lacart_' + numId,
+            type   : 'series',
+            name,
+            poster : poster || undefined,
+        });
+    });
+    return metas;
+}
+
 // ==================== Pre-carga del catalogo completo ====================
 let catalogCache = null;
 
@@ -140,9 +172,11 @@ async function buildFullCatalog() {
     const allMetas = [];
     const seenIds  = new Set();
 
+    allMetas.push(...await processCatalogPage(firstHTML, seenIds)); //procesa firstHTML
+
     // Concurrencia reducida (3 a la vez) + pequena pausa entre lotes,
     // para no disparar limites anti-bot del sitio durante el arranque.
-    for (let i = 0; i < totalPages; i += 3) {
+    for (let i = 1; i < totalPages; i += 3) { //saltamos la primera página que ya procesamos
         const batch = [];
         for (let p = i + 1; p <= Math.min(i + 3, totalPages); p++) {
             batch.push(fetchHTML(`${BASE_URL}/?page=${p}`));
@@ -151,32 +185,7 @@ async function buildFullCatalog() {
 
         for (const result of pages) {
             if (result.status !== 'fulfilled') continue;
-            const $ = cheerio.load(result.value);
-
-            $('a[href]').each((_, el) => {
-                const href  = $(el).attr('href') || '';
-                const match = href.match(/\/serie\/(\d+)$/);
-                if (!match) return;
-
-                const numId = match[1];
-                if (seenIds.has(numId)) return;
-                seenIds.add(numId);
-
-                let poster = $(el).find('img').first().attr('src') || '';
-                if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
-
-                const raw  = $(el).text().trim();
-                const name = raw.replace(/\s+\d{4}\s+\d+\s*$/, '').trim() || ('Serie ' + numId);
-
-                if (!name) return;
-
-                allMetas.push({
-                    id     : 'lacart_' + numId,
-                    type   : 'series',
-                    name,
-                    poster : poster || undefined,
-                });
-            });
+            allMetas.push(...await processCatalogPage(result.value, seenIds));
         }
 
         await new Promise(r => setTimeout(r, 300));
@@ -185,6 +194,17 @@ async function buildFullCatalog() {
     catalogCache = allMetas;
     console.log('[CATALOGO] ' + allMetas.length + ' series cargadas.');
     return allMetas;
+}
+
+async function searchCatalog(searchTerm) {
+    searchTerm = searchTerm.trim().replaceAll(" ", "+").replaceAll(encodeURIComponent(" "), "+");
+
+    const firstHTML  = await fetchHTML(`${BASE_URL}/?Titulo=${searchTerm}`);
+    
+    const matchedMetas = await processCatalogPage(firstHTML);
+
+    console.log('[CATALOGO] ' + matchedMetas.length + ' series encontradas.');
+    return matchedMetas;
 }
 
 // ==================== Detalle de serie (nombre, poster, episodios) ====================
@@ -249,6 +269,8 @@ async function getSeriesDetail(numId) {
         }
     });
 
+    let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
+
     let links = [];
     $('div.series-recomendadas').each((_, el) => {
         const href  = $(el).find('a').first().attr('href') || '';
@@ -275,7 +297,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes, links };
+    const detail = { name, poster, description, baseYear, episodes, links, language };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -292,7 +314,7 @@ const builder = new addon.addonBuilder({
         type  : 'series',
         id    : 'lacart_catalogo',
         name  : 'LACartoons',
-        extra : [{ name: 'skip', isRequired: false }],
+        extra : [{ name: 'skip', isRequired: false }, { name: 'search', isRequired: false }],
     }],
     resources   : ['catalog', 'meta', 'stream'],
     idPrefixes  : ['lacart_'],
@@ -301,10 +323,14 @@ const builder = new addon.addonBuilder({
 // ==================== 1. CATALOGO ====================
 builder.defineCatalogHandler(async ({ extra }) => {
     try {
-        const skip      = parseInt((extra && extra.skip) || 0);
-        const PAGE_SIZE = 20;
-        const all       = await buildFullCatalog();
-        return { metas: all.slice(skip, skip + PAGE_SIZE) };
+        if (extra && extra.search) {
+            return { metas: await searchCatalog(extra.search) };
+        } else {
+            const skip      = parseInt((extra && extra.skip) || 0);
+            const PAGE_SIZE = 20;
+            const all       = await buildFullCatalog();
+            return { metas: all.slice(skip, skip + PAGE_SIZE) };
+        }
     } catch (e) {
         console.error('[CATALOGO ERROR]', e.message);
         return { metas: [] };
@@ -317,7 +343,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes, links } = await getSeriesDetail(numId);
+        const { name, poster, description, baseYear, episodes, links, language } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -334,7 +360,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos, links }
+            meta: { id, type: 'series', name, poster, description, videos, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
