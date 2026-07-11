@@ -43,6 +43,17 @@ function proxyUrl(targetUrl, kind) {
     return `${PUBLIC_URL}/p/${b64urlEncode(targetUrl)}.${kind}`;
 }
 
+const NETWORK_ENUM = Object.freeze({
+    Nickelodeon: 1,
+    "Cartoon Network": 2,
+    "Fox Kids": 3,
+    "Hannah Barbera": 4,
+    Disney: 5,
+    "Warner Channel": 6,
+    Marvel: 7,
+    Otros: 8
+})
+
 /** Extrae streams HLS de ok.ru via yt-dlp (JSON) y los enruta por el proxy. */
 async function extractOkRuStreams(iframeSrc) {
     const { stdout, stderr } = await execAsync(
@@ -161,8 +172,18 @@ function processCatalogPage(html, seenIds=new Set()) {
         let poster = $(el).find('img').first().attr('src') || '';
         if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
 
-        const raw  = $(el).text().trim();
-        const name = raw.replace(/\s+\d{4}\s+\d+\s*$/, '').trim() || ('Serie ' + numId);
+        let network = $(el).find('span.marcador').first().text().trim() || '';
+        let genres, links;
+        if (network) {
+            genres = [network];
+            let networkCat = `stremio:///discover/${encodeURIComponent(`${PUBLIC_URL}/manifest.json`)}/series/lacart_catalogo?genre=${encodeURIComponent(network)}`
+            links = [
+                {category: "Cadena", name: network, url: networkCat},
+                {category: "Genres", name: network, url: networkCat}
+            ]
+        }
+
+        const name = $(el).find('p.nombre-serie').text().trim() || ('Serie ' + numId);
 
         if (!name) return;
 
@@ -285,7 +306,7 @@ async function getSeriesDetail(numId) {
     const name = $('h2').first().text().trim() || ('Serie ' + numId);
 
     let poster = '';
-    $('img[src*="active_storage"]').each((_, el) => {
+    $('.imagen-serie > img[src*="active_storage"]').each((_, el) => {
         if (!poster) {
             const src = $(el).attr('src') || '';
             poster = src.startsWith('http') ? src : `${BASE_URL}${src}`;
@@ -293,6 +314,32 @@ async function getSeriesDetail(numId) {
     });
 
     let language = $('.contenedor-informacion-serie > .informacion-serie-seccion > p').filter((_,el)=>$(el).text().includes('Idioma:')).text().replace("Idioma:","").trim()
+
+    let background = $('img.fondo-serie-seccion[src*="active_storage"]')?.first()?.attr('src');
+    if(background && !background.startsWith('http')) background = `${BASE_URL}${background}`;
+
+    let links = [], genres;
+    $('div.series-recomendadas').each((_, el) => {
+        const href  = $(el).find('a').first().attr('href') || '';
+        const match = href?.match(/\/serie\/(\d+)$/);
+        if (!match) return;
+        const numRel = match[1];
+        links.push({
+            category: $('h3.subtitulo-linea').filter((_, el) => $(el).text().includes('ecomend')).text().trim() || 'Series recomendadas',
+            name: $(el).find('p.nombre-serie').first().text().trim() || ('Serie ' + numRel),
+            url: `stremio:///detail/series/lacart_${numRel}`
+        })
+    })
+
+    let network = $('span.marcador').first().text().trim() || '';
+    if (network) {
+        genres = [network];
+        let networkCat = `stremio:///discover/${encodeURIComponent(`${PUBLIC_URL}/manifest.json`)}/series/lacart_catalogo?genre=${encodeURIComponent(network)}`
+        links.push(
+            {category: "Cadena", name: network, url: networkCat},
+            {category: "Genres", name: network, url: networkCat}
+        )
+    }
 
     const description = $('p')
         .map((_, el) => $(el).text().trim())
@@ -307,7 +354,7 @@ async function getSeriesDetail(numId) {
 
     const episodes = extractEpisodesFromPage($);
 
-    const detail = { name, poster, description, baseYear, episodes, language };
+    const detail = { name, poster, background, description, baseYear, episodes, genres, links, language };
     seriesDetailCache.set(numId, { data: detail, ts: now });
     return detail;
 }
@@ -324,7 +371,7 @@ const builder = new addon.addonBuilder({
         type  : 'series',
         id    : 'lacart_catalogo',
         name  : 'LACartoons',
-        extra : [{ name: 'skip', isRequired: false }, { name: 'search', isRequired: false }],
+        extra : [{ name: 'skip', isRequired: false }, { name: 'search', isRequired: false }, { name: 'genre', isRequired: false, options: Object.keys(NETWORK_ENUM) }],
     }],
     resources   : ['catalog', 'meta', 'stream'],
     idPrefixes  : ['lacart_'],
@@ -337,8 +384,12 @@ builder.defineCatalogHandler(async ({ extra }) => {
             return { metas: await searchCatalog(extra.search) };
         } else {
             const skip      = parseInt((extra && extra.skip) || 0);
+            const genre     = extra?.genre ? decodeURIComponent(extra.genre) : null;
             const PAGE_SIZE = 20;
-            const all       = await buildFullCatalog();
+            const all       = await buildFullCatalog().then(list => {
+                if (!genre) return list;
+                return list.filter(m => m.genres && m.genres.includes(genre));
+            });
             return { metas: all.slice(skip, skip + PAGE_SIZE) };
         }
     } catch (e) {
@@ -353,7 +404,7 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!/^\d+$/.test(numId)) return { meta: null };
 
     try {
-        const { name, poster, description, baseYear, episodes, language } = await getSeriesDetail(numId);
+        const { name, poster, background, description, baseYear, episodes, genres, links, language } = await getSeriesDetail(numId);
 
         if (!episodes.length) {
             console.warn('[META] Sin episodios detectados para serie ' + numId);
@@ -370,7 +421,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, description, videos, language }
+            meta: { id, type: 'series', name, poster, background, description, videos, genres, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
