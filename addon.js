@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * LACartoons Stremio Addon - v1.2.1
+ * LACartoons Stremio Addon - v1.0.0
  * Scraper para lacartoons.com con catalogo completo,
  * temporadas multiples, ids de video conformes al protocolo Stremio,
  * y extraccion de video via yt-dlp con headers de Referer para ok.ru.
@@ -92,6 +92,7 @@ const VIDEO_HOSTS = [
     'youtube.com', 'youtu.be',
     'dailymotion.com', 'vimeo.com',
     'streamtape', 'doodstream', 'player'
+    'rpmvid.com', '://rpmvid.com'
 ];
 
 // ==================== HTTP Client ====================
@@ -547,7 +548,7 @@ app.use(addon.getRouter(builder.getInterface()));
 app.listen(PORT, () => {
     console.log('');
     console.log('================================================');
-    console.log('         LACartoons Addon  v1.2.1');
+    console.log('         LACartoons Addon  v1.0.0');
     console.log('  http://127.0.0.1:' + PORT + '/manifest.json');
     console.log('================================================');
     console.log('');
