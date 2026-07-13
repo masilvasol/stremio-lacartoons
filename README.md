@@ -1,52 +1,85 @@
-# LACartoons Stremio Addon
+# 🎬 LACartoons Stremio Addon
 
-Este proyecto es un complemento (addon) de código abierto para [Stremio](https://www.stremio.com/), que permite visualizar el catálogo de series y caricaturas de LACartoons con una integración nativa y fluida.
+Este proyecto es un complemento (addon) de código abierto para [Stremio](https://www.stremio.com/), diseñado para integrar de forma nativa y fluida el catálogo de series y caricaturas clásicas de `lacartoons.com` con audio Español Latino.
 
-## Características
-* **Catálogo completo:** Acceso a series y episodios.
-* **Streaming optimizado:** Extracción automática de enlaces (`.m3u8`, `.mp4`) mediante scraping inteligente.
-* **Compatibilidad:** Uso de `yt-dlp` como respaldo para reproductores externos.
+---
 
-## Instalación y Ejecución
+## ✨ Características
 
-Para poner en marcha el addon en tu máquina (Windows), sigue estos pasos desde **PowerShell**:
+* **Catálogo Completo:** Acceso indexado a series, temporadas y episodios directamente en la interfaz de Stremio.
+* **Streaming Optimizado:** Extracción dinámica de enlaces de video (`.m3u8`, `.mp4`) mediante scraping inteligente híbrido.
+* **Respaldo con `yt-dlp`:** Uso integrado de herramientas de extracción secundaria para garantizar la estabilidad de los reproductores externos.
+
+---
+
+## 🛠️ Requisitos Previos
+
+Antes de realizar la instalación, asegúrate de contar con los siguientes elementos en tu sistema:
+* **Node.js:** Versión 18 o superior recomendada.
+* **Git:** Configurado en tu entorno local.
+* **Binarios locales:** El ejecutable `yt-dlp.exe` debe estar ubicado en la raíz del proyecto para dar soporte al motor de extracción.
+
+---
+
+## 💻 Instalación y Ejecución Local
+
+Sigue estos pasos desde tu terminal preferida (**PowerShell** o **Bash**) para desplegar el entorno de desarrollo:
 
 ### 1. Clonar el repositorio
-Abre PowerShell y navega a la carpeta donde quieras tener el proyecto, luego clona el repositorio:
-
+Navega hasta el directorio donde desees almacenar el proyecto y clona el código fuente:
 ```powershell
-git clone [https://github.com/TU_USUARIO/stremio-lacartoons.git](https://github.com/TU_USUARIO/stremio-lacartoons.git)
+git clone https://github.com
 cd stremio-lacartoons
+```
 
-### 2. Instalar dependencias
-
-Dentro de la carpeta del proyecto, instala las librerías necesarias en PowerShell:
-
+### 2. Instalar dependencias y binarios de automatización
+Este comando instalará los módulos del framework y ejecutará de forma automatizada la descarga del navegador Chromium headless requerido por el motor de Playwright:
+```powershell
 npm install
+```
 
-### 3. Ejecutar el Addon
+### 3. Iniciar el servidor local
+Pon en marcha el entorno de desarrollo utilizando el script nativo configurado:
+```powershell
+npm start
+```
 
-Una vez instaladas las dependencias, inicia el servidor local:
-PowerShell
+Una vez iniciado, el addon expondrá una interfaz local en la dirección:  
+`http://127.0.0`
 
-node addon.js
+---
 
-## Requisitos Previos
+## 🎮 Cómo Vincular el Addon en Stremio
 
-    - Tener instalado Node.js (v16 o superior recomendado).
-    - Tener yt-dlp.exe descargado y configurado en la ruta especificada dentro de addon.js.
+1. Mantén la terminal con el comando de ejecución **activa**.
+2. Abre la aplicación de **Stremio** en tu computadora o en cualquier dispositivo dentro de tu misma red local.
+3. Dirígete a la sección de **Addons** (icono de la pieza de rompecabezas).
+4. Pega la URL local `http://127.0.0` en la barra de búsqueda superior.
+5. Haz clic en el botón verde **Instalar**.
 
-## ¿Cómo colaborar?
+---
 
-¡Cualquier aporte es bienvenido para mejorar el scraping y la estabilidad!
+## 🤝 ¿Cómo colaborar?
 
-    - Haz un Fork del proyecto.
-    - Crea una rama con tu nueva funcionalidad (git checkout -b feature/nueva-mejora).
-    - Haz un Commit de tus cambios (git commit -m 'Descripción de la mejora').
-    - Haz un Push a la rama (git push origin feature/nueva-mejora).
-    - Abre un Pull Request.
+¡Cualquier aporte para optimizar los selectores de scraping o la estabilidad del flujo de video es totalmente bienvenido!
 
-## Licencia
+1. Haz un **Fork** de este repositorio.
+2. Crea una rama con tu nueva funcionalidad o corrección:
+   ```bash
+   git checkout -b feature/nueva-mejora
+   ```
+3. Registra tus cambios con un mensaje descriptivo:
+   ```bash
+   git commit -m 'feat: optimizar extractor de enlaces de video'
+   ```
+4. Sube la rama a tu repositorio remoto:
+   ```bash
+   git push origin feature/nueva-mejora
+   ```
+5. Abre un **Pull Request** detallando tus modificaciones.
 
-Este proyecto está bajo la Licencia MIT.
+---
 
+## 📄 Licencia
+
+Este proyecto se distribuye bajo la **Licencia MIT**. Consulta el archivo `LICENSE` para obtener más detalles.
