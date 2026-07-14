@@ -59,13 +59,16 @@ function proxyUrl(targetUrl, kind, headers) {
     return `${PUBLIC_URL}/p/${b64urlEncode(payload)}.${kind}`;
 }
 
-// Subconjunto seguro de headers a reenviar (evita colar pseudo-headers HTTP/2
-// u otros que rompan la peticion axios, ej. ":authority", "host", etc.)
+// Capturamos todos los headers que el navegador real envio, excepto los que
+// rompen la peticion (pseudo-headers HTTP/2 ocultos) o los que Node fetch 
+// gestiona por su cuenta (encoding, host, connection).
 function pickSafeHeaders(rawHeaders) {
-    const allow = ['referer', 'origin', 'user-agent', 'cookie'];
+    const exclude = ['host', 'connection', 'content-length', 'accept-encoding', 'upgrade-insecure-requests'];
     const out = {};
     for (const k of Object.keys(rawHeaders || {})) {
-        if (allow.includes(k.toLowerCase())) out[k] = rawHeaders[k];
+        const lower = k.toLowerCase();
+        if (lower.startsWith(':') || exclude.includes(lower)) continue;
+        out[k] = rawHeaders[k];
     }
     return out;
 }
@@ -206,38 +209,50 @@ async function resolveViaPlaywright(pageUrl, referer) {
         const page = await context.newPage();
 
         // Bloqueamos imagenes/fuentes/css (no afectan la deteccion del video)
-        // y ademas los dominios de publicidad/tracking conocidos, para evitar
-        // que un overlay publicitario intercepte nuestro clic de "play".
+        // y ademas los dominios de publicidad/tracking conocidos.
         await page.route('**/*', (route) => {
             const req = route.request();
             const type = req.resourceType();
             const url = req.url();
+
+            // Deteccion PRIMARIA: Si es el manifiesto o video en si, lo guardamos y 
+            // lo ABORTAMOS. Esto es CRITICO para que el servidor (RPMVid) no "queme" 
+            // el token de un solo uso de la URL. Dejamos que el proxy de Node sea 
+            // el que realmente haga la peticion.
+            if (/\.m3u8/i.test(url) || /\.mp4/i.test(url)) {
+                if (!found) {
+                    const safe = pickSafeHeaders(req.headers());
+                    found = { url, headers: safe };
+                    // Extraemos las cookies reales del contexto, porque req.headers()
+                    // en Playwright a menudo omite las cookies computadas o genera basura.
+                    context.cookies(url).then(cookies => {
+                        if (cookies && cookies.length > 0) {
+                            found.headers['cookie'] = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+                        }
+                    }).catch(() => { });
+                }
+                return route.abort(); // ¡No quemar el token!
+            }
+
             if (type === 'image' || type === 'font' || type === 'stylesheet') {
                 return route.abort();
             }
             if (isAdRequest(url)) {
                 return route.abort();
             }
-            return route.continue();
-        });
 
-        // Deteccion PRIMARIA por patron de URL en la peticion (rapida).
-        page.on('request', (req) => {
-            const url = req.url();
-            const type = req.resourceType();
-            if (['xhr', 'fetch', 'media', 'other'].includes(type)) {
+            // Para request log
+            if (['xhr', 'fetch', 'media', 'other'].includes(type) && !url.includes('cdn-cgi')) {
                 seen.push(type + ' ' + url.slice(0, 140));
             }
-            if (found) return;
-            if (/\.m3u8/i.test(url) || /\.mp4/i.test(url)) {
-                found = { url, headers: pickSafeHeaders(req.headers()) };
-            }
+
+            return route.continue();
         });
 
         // Deteccion SECUNDARIA por Content-Type real de la respuesta (cubre
         // manifiestos que no traen ".m3u8"/".mp4" visibles en la URL).
-        //
-        // Deteccion TERCIARIA (la mas importante para cubeembed.rpmvid.com):
+        // NOTA: Si llegamos aqui, el token podria quemarse porque ya se recibio 
+        // la respuesta, pero es un caso raro de fallback.
         // varios embeds cargan un endpoint JSON propio (ej. /api/v1/info)
         // que trae la URL real del video como dato, ANTES de que el
         // reproductor la llegue a pedir directamente. Si el clic de "play"
@@ -252,7 +267,11 @@ async function resolveViaPlaywright(pageUrl, referer) {
                 const rtype = req.resourceType();
 
                 if (!found && (ct.includes('mpegurl') || ct.includes('video/mp4') || ct.includes('video/'))) {
-                    found = { url, headers: pickSafeHeaders(req.headers()) };
+                    const safe = pickSafeHeaders(req.headers());
+                    found = { url, headers: safe };
+                    context.cookies(url).then(c => {
+                        if (c && c.length) found.headers['cookie'] = c.map(x => `${x.name}=${x.value}`).join('; ');
+                    }).catch(() => { });
                     return;
                 }
 
@@ -272,7 +291,11 @@ async function resolveViaPlaywright(pageUrl, referer) {
                     }
                     if (mediaUrl && !found) {
                         console.log('[PLAYWRIGHT] URL de video encontrada en respuesta de:', url);
-                        found = { url: mediaUrl, headers: pickSafeHeaders(req.headers()) };
+                        const safe = pickSafeHeaders(req.headers());
+                        found = { url: mediaUrl, headers: safe };
+                        context.cookies(mediaUrl).then(c => {
+                            if (c && c.length) found.headers['cookie'] = c.map(x => `${x.name}=${x.value}`).join('; ');
+                        }).catch(() => { });
                     } else if (!found) {
                         console.log('[PLAYWRIGHT DEBUG] Respuesta de ' + url + ' (content-type: ' + ct + '):');
                         console.log('[PLAYWRIGHT DEBUG] Cuerpo (primeros 2000 caracteres):');
@@ -795,6 +818,10 @@ function rewritePlaylist(text, baseUrl, headers) {
     const isMaster = text.includes('#EXT-X-STREAM-INF');
     const childKind = isMaster ? 'm3u8' : 'ts';
 
+    // Extraemos los parametros originales del padre (ej. ?k=... token de auth)
+    // porque new URL() desecha los query params del baseUrl al resolver relativas.
+    const baseObj = new URL(baseUrl);
+
     return text.split(/\r?\n/).map(line => {
         const trimmed = line.trim();
         if (!trimmed) return line;
@@ -802,13 +829,20 @@ function rewritePlaylist(text, baseUrl, headers) {
         if (trimmed.startsWith('#')) {
             // Reescribe URIs embebidas (p.ej. claves de cifrado EXT-X-KEY).
             return line.replace(/URI="([^"]+)"/g, (_, uri) => {
-                const abs = new URL(uri, baseUrl).href;
-                return `URI="${proxyUrl(abs, 'ts', headers)}"`;
+                const absObj = new URL(uri, baseUrl);
+                // Heredar tokens (no sobreescribir si el hijo ya trae propios)
+                for (const [k, v] of baseObj.searchParams.entries()) {
+                    if (!absObj.searchParams.has(k)) absObj.searchParams.set(k, v);
+                }
+                return `URI="${proxyUrl(absObj.href, 'ts', headers)}"`;
             });
         }
 
-        const abs = new URL(trimmed, baseUrl).href;
-        return proxyUrl(abs, childKind, headers);
+        const absObj = new URL(trimmed, baseUrl);
+        for (const [k, v] of baseObj.searchParams.entries()) {
+            if (!absObj.searchParams.has(k)) absObj.searchParams.set(k, v);
+        }
+        return proxyUrl(absObj.href, childKind, headers);
     }).join('\n');
 }
 
