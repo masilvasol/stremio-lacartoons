@@ -1,0 +1,19 @@
+# Ejecutables de FFmpeg
+ffmpeg.exe
+ffprobe.exe
+
+# Dependencias principales
+node_modules/
+
+# Temporales y reportes de Playwright
+.test-results/
+playwright-report/
+blob-report/
+playwright/.local-browsers/
+
+# Registros de errores de Node/NPM
+npm-debug.log*
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
