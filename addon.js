@@ -531,8 +531,6 @@ async function buildFullCatalog() {
 
     allMetas.push(...await processCatalogPage(firstHTML, seenIds)); //procesa firstHTML
 
-    allMetas.push(...await processCatalogPage(firstHTML, seenIds)); //procesa firstHTML
-
     // Concurrencia reducida (3 a la vez) + pequena pausa entre lotes,
     // para no disparar limites anti-bot del sitio durante el arranque.
     for (let i = 1; i < totalPages; i += 3) { //saltamos la primera página que ya procesamos
