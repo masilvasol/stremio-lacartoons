@@ -630,11 +630,12 @@ async function getSeriesDetail(numId) {
         .get()
         .find(t => t.length > 30) || '';
 
-    // Ano de la serie, usado solo para fabricar fechas "released" validas
+    // Año de la serie, usado para fabricar fechas "released" validas
     // (Stremio exige ISO 8601 en cada video, aunque no sea la fecha real de emision)
-    const bodyText = $('body').text();
-    const yearMatch = bodyText.match(/A[nñ]o:\s*(\d{4})/);
-    const baseYear = yearMatch ? parseInt(yearMatch[1]) : 2000;
+    // const bodyText = $('body').text();
+    // const yearMatch = bodyText.match(/A[nñ]o:\s*(\d{4})/);
+    // const baseYear = yearMatch ? parseInt(yearMatch[1]) : 2000;
+    const baseYear = parseInt($('span.marcador-año').first().text().trim()) || 2000;
 
     const episodes = extractEpisodesFromPage($);
 
@@ -705,7 +706,7 @@ builder.defineMetaHandler(async ({ id }) => {
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, background, description, videos, genres, links, language }
+            meta: { id, type: 'series', name, poster, background, description, videos, releaseInfo: `${baseYear}`, released: new Date(baseYear, 0, 1).toISOString(), genres, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
