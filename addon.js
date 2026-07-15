@@ -421,14 +421,35 @@ async function extractGenericStreams(pageUrl, referer) {
     if (!found) return [];
 
     const kind = /\.m3u8(\?|$)/i.test(found.url) ? 'm3u8' : 'mp4';
-    return [{
-        name: 'LACartoons',
-        title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
-        url: proxyUrl(found.url, kind, found.headers),
-        behaviorHints: {
-            bingeGroup: 'lacartoons-generic',
-        },
-    }];
+
+    if (kind === 'mp4') {
+        return [{
+            name: 'LACartoons',
+            title: 'HD',
+            url: found.url,
+            behaviorHints: {
+                bingeGroup: 'lacartoons-mp4',
+                notWebReady: true,
+                proxyHeaders: {
+                    "request": found.headers,
+                    "response": {
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                        "Access-Control-Allow-Methods": "GET, OPTIONS"
+                    }
+                }
+            }
+        }];
+    } else {
+        return [{
+            name: 'LACartoons',
+            title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
+            url: proxyUrl(found.url, kind, found.headers),
+            behaviorHints: {
+                bingeGroup: 'lacartoons-generic',
+            },
+        }];
+    }
 }
 
 // Hosts de video que buscamos en el iframe
@@ -816,12 +837,25 @@ builder.defineStreamHandler(async ({ id }, req) => {
 
                     return {
                         streams: [{
-                            name: 'LACartoons',
-                            title: streamResult.title || 'HD',
-                            url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
-                            behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
-                        }]
-                    };
+                                name: 'LACartoons',
+                                title: streamResult.title || 'HD',
+                                url: streamResult.url,
+                                behaviorHints: {
+                                    bingeGroup: 'lacartoons-rpmvid-dir',
+                                    notWebReady: true,
+                                    proxyHeaders: {
+                                        "request": RPMVID_HEADERS
+                                    }
+                                }
+                            },
+                            {
+                                name: 'LACartoons',
+                                title: streamResult.title || 'HD',
+                                url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
+                                behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
+                            }
+                        ]
+                    }
                 } catch (err) {
                     console.error('[PROCESADOR ERROR] Fallo descifrado nativo, usando fallback...', err.message);
                 }
