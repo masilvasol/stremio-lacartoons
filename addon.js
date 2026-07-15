@@ -40,12 +40,6 @@ const PORT = 7000;
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`)
     .replace(/\/+$/, '');
 
-// URL base del addon para reescribir playlists del proxy HLS.
-// Por defecto usa localhost; sobreescribible con PUBLIC_URL si se expone
-// el addon en otra red (p. ej. IP LAN para TV o movil).
-const PUBLIC_URL = (process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`)
-    .replace(/\/+$/, '');
-
 // Headers que ok.ru / okcdn.ru exige para permitir la reproduccion
 const OKRU_HEADERS = {
     'Referer': 'https://ok.ru/',
@@ -128,8 +122,8 @@ async function extractYouTubeStreams(iframeSrc) {
         const ytURL = new URL(iframeSrc);
         let ytId = ytURL.searchParams.get('v') || ytURL.pathname.split('/').pop();
         return [{
-            name  : 'LACartoons',
-            title : 'YouTube',
+            name: 'LACartoons',
+            title: 'YouTube',
             ytId,
             behaviorHints: {
                 bingeGroup: 'lacartoons-yt',
