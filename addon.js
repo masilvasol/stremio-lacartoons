@@ -712,7 +712,7 @@ async function getSeriesDetail(numId) {
 // ==================== Manifest ====================
 const builder = new addon.addonBuilder({
     id: 'org.lacartoons.addon',
-    version: '1.2.0',
+    version: '1.0.0',
     name: 'LACartoons',
     description: 'Caricaturas y series animadas clasicas en Espanol Latino - lacartoons.com',
     logo: `https://raw.githubusercontent.com/masilvasol/stremio-lacartoons/refs/heads/main/logo.png`,
