@@ -837,12 +837,25 @@ builder.defineStreamHandler(async ({ id }, req) => {
 
                     return {
                         streams: [{
-                            name: 'LACartoons',
-                            title: streamResult.title || 'HD',
-                            url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
-                            behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
-                        }]
-                    };
+                                name: 'LACartoons',
+                                title: streamResult.title || 'HD',
+                                url: streamResult.url,
+                                behaviorHints: {
+                                    bingeGroup: 'lacartoons-rpmvid-dir',
+                                    notWebReady: true,
+                                    proxyHeaders: {
+                                        "request": RPMVID_HEADERS
+                                    }
+                                }
+                            },
+                            {
+                                name: 'LACartoons',
+                                title: streamResult.title || 'HD',
+                                url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
+                                behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
+                            }
+                        ]
+                    }
                 } catch (err) {
                     console.error('[PROCESADOR ERROR] Fallo descifrado nativo, usando fallback...', err.message);
                 }
