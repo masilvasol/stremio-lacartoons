@@ -14,6 +14,10 @@ const cheerio = require('cheerio');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const path = require('path');
+const https = require('https');
+
+// Módulo nativo para descifrar cubeembed / rpmvid
+const rpmvid = require('./rpmvid.js');
 
 const execAsync = promisify(exec);
 
@@ -33,6 +37,7 @@ try {
 const BASE_URL = 'https://lacartoons.com';
 const YT_DLP = path.resolve(__dirname, 'yt-dlp.exe');
 const PORT = 7000;
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
 // URL base del addon para reescribir playlists del proxy HLS.
 // Por defecto usa localhost; sobreescribible con PUBLIC_URL si se expone
@@ -46,6 +51,22 @@ const OKRU_HEADERS = {
     'Origin': 'https://ok.ru',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 };
+
+const RPMVID_HEADERS = {
+    Referer: 'https://cubeembed.rpmvid.com/',
+    Origin: 'https://cubeembed.rpmvid.com',
+    'User-Agent': UA,
+};
+
+const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
+
+function upstreamAgentFor(url) {
+    try {
+        const host = new URL(url).hostname;
+        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return insecureHttpsAgent;
+    } catch { /* ignore */ }
+    return undefined;
+}
 
 const b64urlEncode = s => Buffer.from(s, 'utf8').toString('base64url');
 const b64urlDecode = s => Buffer.from(s, 'base64url').toString('utf8');
@@ -738,7 +759,7 @@ builder.defineMetaHandler(async ({ id }) => {
 });
 
 // ==================== 3. STREAM ====================
-builder.defineStreamHandler(async ({ id }) => {
+builder.defineStreamHandler(async ({ id }, req) => {
     // Formato esperado: lacart_{numId}:{temporada}:{episodio}
     const m = id.match(/^lacart_(\d+):(\d+):(\d+)$/);
     if (!m) return { streams: [] };
@@ -781,29 +802,47 @@ builder.defineStreamHandler(async ({ id }) => {
             }
         });
 
-        if (iframeSrc) {
-            if (YT_HOSTS.some(h => iframeSrc.includes(h))) {
-                console.log('[STREAM] Extrayendo URL de YouTube:', iframeSrc);
+        // 1. Interceptar si el host es de rpmvid / cubeembed (desofuscador rapido)
+        const RPMVID_RE = /(rpmvid\.com|cubeembed)/i;
+        const rpmvidTarget = [embedSrc, iframeSrc, epUrl].find(u => u && RPMVID_RE.test(u)) || null;
+        const isRpmvid = !!rpmvidTarget;
 
-                const streams = await extractYouTubeStreams(iframeSrc);
-                if (!streams.length) {
-                    console.warn('[STREAM] No se pudo extraer la ID del video de YouTube.');
-                    return { streams: [] };
-                }
+        if (isRpmvid) {
+            const videoId = rpmvid.videoIdFromIframe(rpmvidTarget);
+            if (videoId) {
+                try {
+                    const streamResult = await rpmvid.resolveLiveMaster(videoId);
+                    console.log(`[PROCESADOR] Video descifrado con exito: ${streamResult.title || 'OK'}`);
 
-                console.log('[STREAM] Streams YT:', streams.map(s => s.title).join(', '));
-            } else {
-                console.log('[STREAM] Host conocido, usando yt-dlp:', iframeSrc);
-                const streams = await extractOkRuStreams(iframeSrc);
-                if (streams.length) {
-                    console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
-                    return { streams };
+                    return {
+                        streams: [{
+                            name: 'LACartoons',
+                            title: streamResult.title || 'HD',
+                            url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
+                            behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
+                        }]
+                    };
+                } catch (err) {
+                    console.error('[PROCESADOR ERROR] Fallo descifrado nativo, usando fallback...', err.message);
                 }
-                console.warn('[STREAM] yt-dlp no devolvio streams, se intenta fallback generico...');
             }
-        } else {
+        }
+
+        // 2. Flujo Alternativo (Si no es rpmvid o si el paso anterior falla)
+        if (iframeSrc && !isRpmvid) {
+            if (YT_HOSTS.some(h => iframeSrc.includes(h))) {
+                console.log('[STREAM] Extrayendo URL de YouTube...');
+                const streams = await extractYouTubeStreams(iframeSrc);
+                if (streams.length) return { streams };
+            } else {
+                console.log('[STREAM] Host conocido, usando yt-dlp...');
+                const streams = await extractOkRuStreams(iframeSrc);
+                if (streams.length) return { streams };
+            }
+        } else if (!isRpmvid) {
             console.log('[STREAM] Sin host conocido en la pagina, usando fallback Playwright.');
         }
+
 
         if (!chromium) {
             console.warn('[STREAM] Playwright no disponible; no se puede resolver este episodio.');
@@ -907,36 +946,39 @@ app.get('/p/:enc', async (req, res) => {
 
         console.log(`[PROXY] Pidiendo ${isPlaylist ? 'playlist' : 'chunk'} a: ${targetUrl.slice(0, 100)}...`);
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        const axiosOpts = {
+            headers: reqHeaders,
+            timeout: 20000,
+            maxRedirects: 5,
+            validateStatus: () => true,
+        };
+        const agent = upstreamAgentFor(targetUrl);
+        if (agent) axiosOpts.httpsAgent = agent;
 
-        let upstream;
-        try {
-            upstream = await fetch(targetUrl, {
-                headers: reqHeaders,
-                redirect: 'follow',
-                signal: controller.signal
-            });
-        } finally {
-            clearTimeout(timeoutId);
+        if (isPlaylist) {
+            axiosOpts.responseType = 'text';
+        } else {
+            axiosOpts.responseType = 'arraybuffer';
         }
 
-        if (!upstream.ok && upstream.status >= 400) {
+        const upstream = await axios.get(targetUrl, axiosOpts);
+
+        if (upstream.status >= 400) {
             console.error(`[PROXY ERROR] Upstream devolvio ${upstream.status} para ${targetUrl.slice(0, 100)}`);
             return res.status(upstream.status).end();
         }
 
         setCors(res);
-        const ct = upstream.headers.get('content-type') || '';
+        const ct = upstream.headers['content-type'] || '';
 
-        // Reenviar Set-Cookie si el servidor de video lo manda (vitál para CDN con tokens)
-        const setCookie = upstream.headers.get('set-cookie');
+        // Reenviar Set-Cookie si el servidor de video lo manda (vital para CDN con tokens)
+        const setCookie = upstream.headers['set-cookie'];
         if (setCookie) {
-            res.setHeader('Set-Cookie', setCookie);
+            res.setHeader('Set-Cookie', Array.isArray(setCookie) ? setCookie.join('; ') : setCookie);
         }
 
         if (isPlaylist || ct.includes('mpegurl')) {
-            const text = await upstream.text();
+            const text = typeof upstream.data === 'string' ? upstream.data : String(upstream.data);
             const rewritten = rewritePlaylist(text, targetUrl, headers);
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
             return res.send(rewritten);
@@ -945,37 +987,34 @@ app.get('/p/:enc', async (req, res) => {
         // Passthrough de status/headers relevantes para soportar seek (206).
         if (upstream.status === 206) {
             res.status(206);
-            const cr = upstream.headers.get('content-range');
+            const cr = upstream.headers['content-range'];
             if (cr) res.setHeader('Content-Range', cr);
         }
-        const ar = upstream.headers.get('accept-ranges');
+        const ar = upstream.headers['accept-ranges'];
         if (ar) res.setHeader('Accept-Ranges', ar);
 
         res.setHeader('Content-Type', ct || (raw.endsWith('.mp4') ? 'video/mp4' : 'video/mp2t'));
-        const arrayBuffer = await upstream.arrayBuffer();
-        let buf = Buffer.from(arrayBuffer);
+        let buf = Buffer.from(upstream.data);
 
         // ===== DE-OFUSCACION DE CHUNKS =====
         // HACK: Hosts como rpmvid/show-sb alojan chunks de video en CDNs de imagenes
-        // (ej. tiktokcdn.com) disfrazandolos con cabeceras PNG/JPG falsas. El 
+        // (ej. tiktokcdn.com) disfrazandolos con cabeceras PNG/JPG falsas. El
         // reproductor web las corta, pero Stremio falla al ver firmas invalidas.
-        // Si no es un playlist, buscamos el inicio real del MPEG-TS (firma 0x47 
+        // Si no es un playlist, buscamos el inicio real del MPEG-TS (firma 0x47
         // repetida cada 188 bytes) y cortamos la basura inicial.
         if (!isPlaylist && !ct.includes('mpegurl') && !raw.endsWith('.mp4') && buf.length > 376) {
-            // Escaneamos los primeros 1024 bytes por si acaso
             const maxScan = Math.min(1024, buf.length - 189);
             for (let i = 0; i < maxScan; i++) {
                 if (buf[i] === 0x47 && buf[i + 188] === 0x47) {
                     if (i > 0) {
                         console.log(`[PROXY] Cortados ${i} bytes de ofuscacion en el chunk.`);
-                        buf = buf.subarray(i); // Node >= 14
+                        buf = buf.subarray(i);
                     }
                     break;
                 }
             }
         }
 
-        // Corregimos el Content-Length manualmente por si Stremio/Express desconfia
         res.setHeader('Content-Length', buf.length);
         return res.send(buf);
     } catch (e) {
