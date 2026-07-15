@@ -400,14 +400,35 @@ async function extractGenericStreams(pageUrl, referer) {
     if (!found) return [];
 
     const kind = /\.m3u8(\?|$)/i.test(found.url) ? 'm3u8' : 'mp4';
-    return [{
-        name: 'LACartoons',
-        title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
-        url: proxyUrl(found.url, kind, found.headers),
-        behaviorHints: {
-            bingeGroup: 'lacartoons-generic',
-        },
-    }];
+
+    if (kind === 'mp4') {
+        return [{
+            name: 'LACartoons',
+            title: 'HD',
+            url: found.url,
+            behaviorHints: {
+                bingeGroup: 'lacartoons-mp4',
+                notWebReady: true,
+                proxyHeaders: {
+                    "request": found.headers,
+                    "response": {
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Headers": "*",
+                        "Access-Control-Allow-Methods": "GET, OPTIONS"
+                    }
+                }
+            }
+        }];
+    } else {
+        return [{
+            name: 'LACartoons',
+            title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
+            url: proxyUrl(found.url, kind, found.headers),
+            behaviorHints: {
+                bingeGroup: 'lacartoons-generic',
+            },
+        }];
+    }
 }
 
 // Hosts de video que buscamos en el iframe
