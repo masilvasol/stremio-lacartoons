@@ -40,6 +40,12 @@ const PORT = 7000;
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`)
     .replace(/\/+$/, '');
 
+// URL base del addon para reescribir playlists del proxy HLS.
+// Por defecto usa localhost; sobreescribible con PUBLIC_URL si se expone
+// el addon en otra red (p. ej. IP LAN para TV o movil).
+const PUBLIC_URL = (process.env.PUBLIC_URL || `http://127.0.0.1:${PORT}`)
+    .replace(/\/+$/, '');
+
 // Headers que ok.ru / okcdn.ru exige para permitir la reproduccion
 const OKRU_HEADERS = {
     'Referer': 'https://ok.ru/',
@@ -114,6 +120,25 @@ async function extractOkRuStreams(iframeSrc) {
                 bingeGroup: 'lacartoons-hls',
             },
         }));
+}
+
+/** Extrae IDs de videos de YouTube de las URL y formatea los streams */
+async function extractYouTubeStreams(iframeSrc) {
+    try {
+        const ytURL = new URL(iframeSrc);
+        let ytId = ytURL.searchParams.get('v') || ytURL.pathname.split('/').pop();
+        return [{
+            name  : 'LACartoons',
+            title : 'YouTube',
+            ytId,
+            behaviorHints: {
+                bingeGroup: 'lacartoons-yt',
+            },
+        }]
+    } catch (e) {
+        console.warn('[STREAM] URL de YouTube invalida:', iframeSrc);
+        return []
+    }
 }
 
 // ==================== Fallback generico via Playwright ====================
@@ -397,6 +422,10 @@ const VIDEO_HOSTS = [
     'youtube.com', 'youtu.be',
     'dailymotion.com', 'vimeo.com',
     'streamtape', 'doodstream', 'player'
+];
+
+const YT_HOSTS = [
+    'youtube.com', 'youtu.be'
 ];
 
 // ==================== HTTP Client ====================
@@ -759,13 +788,25 @@ builder.defineStreamHandler(async ({ id }) => {
         });
 
         if (iframeSrc) {
-            console.log('[STREAM] Host conocido, usando yt-dlp:', iframeSrc);
-            const streams = await extractOkRuStreams(iframeSrc);
-            if (streams.length) {
-                console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
-                return { streams };
+            if (YT_HOSTS.some(h => iframeSrc.includes(h))) {
+                console.log('[STREAM] Extrayendo URL de YouTube:', iframeSrc);
+
+                const streams = await extractYouTubeStreams(iframeSrc);
+                if (!streams.length) {
+                    console.warn('[STREAM] No se pudo extraer la ID del video de YouTube.');
+                    return { streams: [] };
+                }
+
+                console.log('[STREAM] Streams YT:', streams.map(s => s.title).join(', '));
+            } else {
+                console.log('[STREAM] Host conocido, usando yt-dlp:', iframeSrc);
+                const streams = await extractOkRuStreams(iframeSrc);
+                if (streams.length) {
+                    console.log('[STREAM] Streams HLS:', streams.map(s => s.title).join(', '));
+                    return { streams };
+                }
+                console.warn('[STREAM] yt-dlp no devolvio streams, se intenta fallback generico...');
             }
-            console.warn('[STREAM] yt-dlp no devolvio streams, se intenta fallback generico...');
         } else {
             console.log('[STREAM] Sin host conocido en la pagina, usando fallback Playwright.');
         }
@@ -774,7 +815,6 @@ builder.defineStreamHandler(async ({ id }) => {
             console.warn('[STREAM] Playwright no disponible; no se puede resolver este episodio.');
             return { streams: [] };
         }
-
         // Navegar Playwright directamente a la URL del embed (ej. cubeembed)
         // en vez de la pagina del episodio. Esto convierte las peticiones del
         // reproductor en peticiones del main frame, haciendolas visibles a
