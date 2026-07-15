@@ -98,7 +98,7 @@ const NETWORK_ENUM = Object.freeze({
     Nickelodeon: 1,
     "Cartoon Network": 2,
     "Fox Kids": 3,
-    "Hannah Barbera": 4,
+    "Hanna Barbera": 4,
     Disney: 5,
     "Warner Channel": 6,
     Marvel: 7,
