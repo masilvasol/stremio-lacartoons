@@ -116,7 +116,28 @@ async function extractOkRuStreams(iframeSrc) {
     const info = JSON.parse(stdout);
     const seen = new Set();
 
-    return (info.formats || [])
+    const native = (info.formats || [])
+        .filter(f => f.protocol === 'm3u8_native' && f.url && f.height)
+        .sort((a, b) => (b.height || 0) - (a.height || 0))
+        .filter(f => {
+            if (f.height > 720 || seen.has(`${f.height}n`)) return false;
+            seen.add(`${f.height}n`);
+            return true;
+        })
+        .map(f => ({
+            name: 'LACartoons',
+            title: `${f.height}p`,
+            url: f.url,
+            behaviorHints: {
+                bingeGroup: 'lacartoons-okru-dir',
+                notWebReady: true,
+                proxyHeaders: {
+                    "request": OKRU_HEADERS
+                }
+            }
+        }));
+
+    const proxied = (info.formats || [])
         .filter(f => f.protocol === 'm3u8_native' && f.url && f.height)
         .sort((a, b) => (b.height || 0) - (a.height || 0))
         .filter(f => {
@@ -125,7 +146,7 @@ async function extractOkRuStreams(iframeSrc) {
             return true;
         })
         .map(f => ({
-            name: 'LACartoons',
+            name: 'LACartoons (proxy)',
             title: `${f.height}p`,
             // Servimos la lista de reproduccion via nuestro proxy: reescribe
             // los segmentos y añade las cabeceras de ok.ru + CORS, de modo que
@@ -135,6 +156,8 @@ async function extractOkRuStreams(iframeSrc) {
                 bingeGroup: 'lacartoons-hls',
             },
         }));
+
+    return native.concat(proxied);
 }
 
 /** Extrae IDs de videos de YouTube de las URL y formatea los streams */
@@ -442,7 +465,7 @@ async function extractGenericStreams(pageUrl, referer) {
         }];
     } else {
         return [{
-            name: 'LACartoons',
+            name: 'LACartoons (proxy)',
             title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
             url: proxyUrl(found.url, kind, found.headers),
             behaviorHints: {
@@ -849,7 +872,7 @@ builder.defineStreamHandler(async ({ id }, req) => {
                                 }
                             },
                             {
-                                name: 'LACartoons',
+                                name: 'LACartoons (proxy)',
                                 title: streamResult.title || 'HD',
                                 url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
                                 behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
