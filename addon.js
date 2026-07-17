@@ -71,7 +71,16 @@ function upstreamAgentFor(url) {
 const b64urlEncode = s => Buffer.from(s, 'utf8').toString('base64url');
 const b64urlDecode = s => Buffer.from(s, 'base64url').toString('utf8');
 
-// Construye una URL del proxy HLS/MP4. `kind` es 'm3u8', 'ts' o 'mp4'.
+/** Clasifica URI HLS: playlist, fMP4 (rpmvid) o MPEG-TS (ok.ru). */
+function playlistKind(uri) {
+    if (/\.m3u8(\?|$)/i.test(uri)) return 'm3u8';
+    // rpmvid usa fMP4 (init.mp4 + seg.m4s); a veces lo disfraza de .woff/.woff2.
+    // Stremio Web falla si la URL del proxy termina en .ts con contenido mp4.
+    if (/\.(m4s|mp4|cmfv|cmfa|woff2?|ttf)(\?|$)/i.test(uri)) return 'm4s';
+    return 'ts';
+}
+
+// Construye una URL del proxy HLS/MP4. `kind` es 'm3u8', 'ts', 'mp4' o 'm4s'.
 // `headers` viaja codificado junto con la URL, para que el proxy pueda
 // reenviar exactamente los headers que el host de origen exige (Referer,
 // Origin, Cookie, etc.), sin importar de que sitio venga el video.
@@ -854,34 +863,17 @@ builder.defineStreamHandler(async ({ id }, req) => {
         if (isRpmvid) {
             const videoId = rpmvid.videoIdFromIframe(rpmvidTarget);
             if (videoId) {
-                try {
-                    const streamResult = await rpmvid.resolveLiveMaster(videoId);
-                    console.log(`[PROCESADOR] Video descifrado con exito: ${streamResult.title || 'OK'}`);
-
-                    return {
-                        streams: [{
-                                name: 'LACartoons',
-                                title: streamResult.title || 'HD',
-                                url: streamResult.url,
-                                behaviorHints: {
-                                    bingeGroup: 'lacartoons-rpmvid-dir',
-                                    notWebReady: true,
-                                    proxyHeaders: {
-                                        "request": RPMVID_HEADERS
-                                    }
-                                }
-                            },
-                            {
-                                name: 'LACartoons (proxy)',
-                                title: streamResult.title || 'HD',
-                                url: proxyUrl(streamResult.url, 'm3u8', RPMVID_HEADERS),
-                                behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
-                            }
-                        ]
-                    }
-                } catch (err) {
-                    console.error('[PROCESADOR ERROR] Fallo descifrado nativo, usando fallback...', err.message);
-                }
+                // No incrustamos el master firmado (caduca): Stremio apunta a
+                // /r/{id}.m3u8, que regenera el token al momento de reproducir.
+                console.log('[RPMVID] Stream lazy:', `${PUBLIC_URL}/r/${videoId}.m3u8`);
+                return {
+                    streams: [{
+                        name: 'LACartoons',
+                        title: 'Auto (HLS)',
+                        url: `${PUBLIC_URL}/r/${encodeURIComponent(videoId)}.m3u8`,
+                        behaviorHints: { bingeGroup: 'lacartoons-rpmvid' },
+                    }],
+                };
             }
         }
 
@@ -946,9 +938,6 @@ function setCors(res) {
 // Reescribe una playlist m3u8: cada URI hija se re-enruta por el proxy,
 // conservando los mismos headers que se usaron para la playlist padre.
 function rewritePlaylist(text, baseUrl, headers) {
-    const isMaster = text.includes('#EXT-X-STREAM-INF');
-    const childKind = isMaster ? 'm3u8' : 'ts';
-
     // Extraemos los parametros originales del padre (ej. ?k=... token de auth)
     // porque new URL() desecha los query params del baseUrl al resolver relativas.
     const baseObj = new URL(baseUrl);
@@ -958,14 +947,13 @@ function rewritePlaylist(text, baseUrl, headers) {
         if (!trimmed) return line;
 
         if (trimmed.startsWith('#')) {
-            // Reescribe URIs embebidas (p.ej. claves de cifrado EXT-X-KEY).
+            // EXT-X-MEDIA / EXT-X-MAP / EXT-X-KEY: usar playlistKind (audio .m3u8, init .mp4).
             return line.replace(/URI="([^"]+)"/g, (_, uri) => {
                 const absObj = new URL(uri, baseUrl);
-                // Heredar tokens (no sobreescribir si el hijo ya trae propios)
                 for (const [k, v] of baseObj.searchParams.entries()) {
                     if (!absObj.searchParams.has(k)) absObj.searchParams.set(k, v);
                 }
-                return `URI="${proxyUrl(absObj.href, 'ts', headers)}"`;
+                return `URI="${proxyUrl(absObj.href, playlistKind(absObj.pathname + absObj.search), headers)}"`;
             });
         }
 
@@ -973,7 +961,7 @@ function rewritePlaylist(text, baseUrl, headers) {
         for (const [k, v] of baseObj.searchParams.entries()) {
             if (!absObj.searchParams.has(k)) absObj.searchParams.set(k, v);
         }
-        return proxyUrl(absObj.href, childKind, headers);
+        return proxyUrl(absObj.href, playlistKind(absObj.pathname + absObj.search), headers);
     }).join('\n');
 }
 
@@ -982,7 +970,8 @@ app.options('/p/:enc', (req, res) => { setCors(res); res.sendStatus(204); });
 app.get('/p/:enc', async (req, res) => {
     const raw = req.params.enc;
     const isPlaylist = raw.endsWith('.m3u8');
-    const enc = raw.replace(/\.(m3u8|ts|mp4)$/, '');
+    const isFmp4 = raw.endsWith('.m4s') || raw.endsWith('.mp4');
+    const enc = raw.replace(/\.(m3u8|ts|mp4|m4s)$/, '');
 
     let targetUrl, headers;
     try {
@@ -1038,6 +1027,7 @@ app.get('/p/:enc', async (req, res) => {
             const text = typeof upstream.data === 'string' ? upstream.data : String(upstream.data);
             const rewritten = rewritePlaylist(text, targetUrl, headers);
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Cache-Control', 'no-store');
             return res.send(rewritten);
         }
 
@@ -1050,16 +1040,22 @@ app.get('/p/:enc', async (req, res) => {
         const ar = upstream.headers['accept-ranges'];
         if (ar) res.setHeader('Accept-Ranges', ar);
 
-        res.setHeader('Content-Type', ct || (raw.endsWith('.mp4') ? 'video/mp4' : 'video/mp2t'));
+        // Conservar content-type real (video/mp4, audio/mp4 para fMP4).
+        let outCt = ct;
+        if (!outCt || /octet-stream|font\//i.test(outCt)) {
+            outCt = isFmp4 || /\.(m4s|mp4)(\?|$)/i.test(targetUrl)
+                ? 'video/mp4'
+                : 'video/mp2t';
+        }
+        res.setHeader('Content-Type', outCt);
         let buf = Buffer.from(upstream.data);
 
         // ===== DE-OFUSCACION DE CHUNKS =====
         // HACK: Hosts como rpmvid/show-sb alojan chunks de video en CDNs de imagenes
         // (ej. tiktokcdn.com) disfrazandolos con cabeceras PNG/JPG falsas. El
         // reproductor web las corta, pero Stremio falla al ver firmas invalidas.
-        // Si no es un playlist, buscamos el inicio real del MPEG-TS (firma 0x47
-        // repetida cada 188 bytes) y cortamos la basura inicial.
-        if (!isPlaylist && !ct.includes('mpegurl') && !raw.endsWith('.mp4') && buf.length > 376) {
+        // Solo aplica a MPEG-TS; no tocar fMP4 (.m4s/.mp4).
+        if (!isPlaylist && !ct.includes('mpegurl') && !isFmp4 && !/video\/mp4|audio\/mp4/i.test(ct) && buf.length > 376) {
             const maxScan = Math.min(1024, buf.length - 189);
             for (let i = 0; i < maxScan; i++) {
                 if (buf[i] === 0x47 && buf[i + 188] === 0x47) {
@@ -1077,6 +1073,28 @@ app.get('/p/:enc', async (req, res) => {
     } catch (e) {
         console.error('[PROXY ERROR]', e.message);
         return res.status(502).end();
+    }
+});
+
+// Regenera el master HLS de rpmvid al reproducir (tokens firmados caducan).
+app.options('/r/:id', (req, res) => { setCors(res); res.sendStatus(204); });
+
+app.get('/r/:id', async (req, res) => {
+    const videoId = String(req.params.id || '').replace(/\.m3u8$/i, '').trim();
+    if (!/^[a-zA-Z0-9_-]{2,32}$/.test(videoId)) {
+        return res.status(400).send('bad id');
+    }
+
+    try {
+        const { url, playlist } = await rpmvid.resolveLiveMaster(videoId);
+        console.log(`[RPMVID] Live master (${videoId}):`, url);
+        setCors(res);
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        res.setHeader('Cache-Control', 'no-store');
+        return res.send(rewritePlaylist(playlist, url, RPMVID_HEADERS));
+    } catch (e) {
+        console.error('[RPMVID RESOLVE]', e.message);
+        return res.status(502).send('rpmvid resolve failed');
     }
 });
 
