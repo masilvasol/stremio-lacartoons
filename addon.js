@@ -35,7 +35,26 @@ try {
 
 // ==================== Configuracion ====================
 const BASE_URL = 'https://lacartoons.com';
-const YT_DLP = path.resolve(__dirname, 'yt-dlp.exe');
+
+const YT_DLP = (() => {
+    let fileName
+    switch (process.platform) {
+        case 'win32':
+            fileName = 'yt-dlp.exe'
+            break;
+        case 'linux':
+            fileName = 'yt-dlp_linux'
+            break;
+        case 'darwin':
+            fileName = 'yt-dlp_macos'
+            break;
+        default:
+            break;
+    }
+
+    return path.resolve(__dirname, fileName);
+})();
+
 const PORT = 7000;
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
