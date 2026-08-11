@@ -56,6 +56,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY addon.js ./
 COPY rpmvid.js ./
+COPY mapping.json ./
 COPY logo.png ./
 
 # Instalar dependencias de Node

@@ -19,6 +19,27 @@ const https = require('https');
 // Módulo nativo para descifrar cubeembed / rpmvid
 const rpmvid = require('./rpmvid.js');
 
+// Cargar mapa de equivalencias IMDb/TMDB -> LACartoons
+const imdbToLacartMap = new Map();
+const tmdbToLacartMap = new Map();
+try {
+    const mappingData = require('./mapping.json');
+    const mappingsObj = mappingData.mappings || mappingData;
+    for (const key of Object.keys(mappingsObj)) {
+        const item = mappingsObj[key];
+        if (!item) continue;
+        const numId = key.replace(/^lc_/, '');
+        const imdbId = item.imdb || item.imdb_id;
+        const tmdbId = item.tmdb || item.tmdb_id;
+
+        if (imdbId) imdbToLacartMap.set(String(imdbId).trim(), numId);
+        if (tmdbId) tmdbToLacartMap.set(String(tmdbId).trim(), numId);
+    }
+    console.log(`[MAPPING] Cargadas ${imdbToLacartMap.size} equivalencias IMDb y ${tmdbToLacartMap.size} equivalencias TMDB -> LACartoons`);
+} catch (e) {
+    console.warn('[MAPPING WARN] No se pudo cargar mapping.json:', e.message);
+}
+
 const execAsync = promisify(exec);
 
 // Playwright es opcional: si no esta instalado o los navegadores no se
@@ -767,7 +788,15 @@ const builder = new addon.addonBuilder({
         name: 'LACartoons',
         extra: [{ name: 'skip', isRequired: false }, { name: 'search', isRequired: false }, { name: 'genre', isRequired: false, options: Object.keys(NETWORK_ENUM) }],
     }],
-    resources: ['catalog', 'meta', 'stream'],
+    resources: [
+        'catalog',
+        'meta',
+        {
+            name: 'stream',
+            types: ['series'],
+            idPrefixes: ['lacart_', 'tt', 'tmdb:', 'tmdb_']
+        }
+    ],
     idPrefixes: ['lacart_'],
 });
 
@@ -825,17 +854,71 @@ builder.defineMetaHandler(async ({ id }) => {
 
 // ==================== 3. STREAM ====================
 builder.defineStreamHandler(async ({ id }, req) => {
-    // Formato esperado: lacart_{numId}:{temporada}:{episodio}
-    const m = id.match(/^lacart_(\d+):(\d+):(\d+)$/);
-    if (!m) return { streams: [] };
+    // Formatos soportados:
+    // 1) lacart_{numId}:{temporada}:{episodio}
+    // 2) {imdbId}:{temporada}:{episodio} (ej. tt0105928:1:5)
+    // 3) tmdb:{tmdbId}:{temporada}:{episodio} (ej. tmdb:1916:1:5 o tmdb_1916:1:5)
+    let numId = null;
+    let season = 1;
+    let episode = 1;
 
-    const numId = m[1];
-    const season = parseInt(m[2]);
-    const episode = parseInt(m[3]);
+    const lacartMatch = id.match(/^lacart_(\d+):(\d+):(\d+)$/);
+    const imdbMatch = id.match(/^(tt\d+):(\d+):(\d+)$/);
+    const tmdbMatch = id.match(/^tmdb:?_?(\d+):(\d+):(\d+)$/i);
+
+    if (lacartMatch) {
+        numId = lacartMatch[1];
+        season = parseInt(lacartMatch[2]);
+        episode = parseInt(lacartMatch[3]);
+    } else if (imdbMatch) {
+        const imdbId = imdbMatch[1];
+        season = parseInt(imdbMatch[2]);
+        episode = parseInt(imdbMatch[3]);
+        numId = imdbToLacartMap.get(imdbId);
+        if (!numId) {
+            console.warn(`[STREAM] Sin equivalencia LACartoons para IMDb ID ${imdbId}`);
+            return { streams: [] };
+        }
+        console.log(`[STREAM] Mapeado Cinemeta IMDb ${imdbId} -> LACartoons serie ${numId} (S${season}E${episode})`);
+    } else if (tmdbMatch) {
+        const tmdbId = tmdbMatch[1];
+        season = parseInt(tmdbMatch[2]);
+        episode = parseInt(tmdbMatch[3]);
+        numId = tmdbToLacartMap.get(tmdbId);
+        if (!numId) {
+            console.warn(`[STREAM] Sin equivalencia LACartoons para TMDB ID ${tmdbId}`);
+            return { streams: [] };
+        }
+        console.log(`[STREAM] Mapeado TMDB ${tmdbId} -> LACartoons serie ${numId} (S${season}E${episode})`);
+    } else {
+        return { streams: [] };
+    }
 
     try {
         const { episodes } = await getSeriesDetail(numId);
-        const match = episodes.find(e => e.season === season && e.episode === episode);
+        if (!episodes || !episodes.length) {
+            console.warn(`[STREAM] No hay episodios detectados para serie ${numId}`);
+            return { streams: [] };
+        }
+
+        // Intento 1: Coincidencia exacta por temporada y episodio
+        let match = episodes.find(e => e.season === season && e.episode === episode);
+
+        // Intento 2: Fallback si LACartoons agrupa capitulos en S1 o difiere en numero de temporada
+        if (!match) {
+            let cumulativeIndex = episode;
+            if (season > 1) {
+                const prevSeasonsEps = episodes.filter(e => e.season < season).length;
+                if (prevSeasonsEps > 0) {
+                    cumulativeIndex = prevSeasonsEps + episode;
+                }
+            }
+
+            if (cumulativeIndex > 0 && cumulativeIndex <= episodes.length) {
+                match = episodes[cumulativeIndex - 1];
+                console.log(`[STREAM] Fallback acumulativo S${season}E${episode} -> Episodio #${cumulativeIndex} ("${match.title}")`);
+            }
+        }
 
         if (!match) {
             console.warn(`[STREAM] No se encontro S${season}E${episode} para serie ${numId}`);
