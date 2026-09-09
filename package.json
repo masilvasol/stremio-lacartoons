@@ -4,7 +4,8 @@
   "description": "Addon de Stremio para ver caricaturas clasicas de lacartoons.com en Espanol Latino.",
   "main": "addon.js",
   "scripts": {
-    "start": "node addon.js"
+    "start": "node addon.js",
+    "postinstall": "curl -L -o yt-dlp_linux https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux"
   },
   "keywords": [
     "stremio",
