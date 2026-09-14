@@ -76,10 +76,11 @@ const YT_DLP = process.env.YT_DLP_PATH
         }
         return path.resolve(__dirname, fileName);
     })();
-const ytdlp = new YtDlp({
-    binaryPath: YT_DLP
-});
-(ytdlp.checkInstallation()) ? console.log('yt-dlp detectado y funcional') : console.error('[WARN] yt-dlp no esta instalado o no es ejecutable. Algunos hosts de video no funcionarán')
+const ytdlp = new YtDlp({ binaryPath: YT_DLP });
+ytdlp.updateYtDlpAsync({ preferBuiltIn: true }).then((upResult) => {
+    console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'binario local actualizado a' : 'nuevo binario descargado con'} la última versión (${upResult.version}) en ${upResult.binaryPath}`)
+}).catch(() => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp. Usando ruta ${YT_DLP}...`))
+    .finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
