@@ -11,8 +11,7 @@ const express = require('express');
 const addon = require('stremio-addon-sdk');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { exec } = require('child_process');
-const { promisify } = require('util');
+const { YtDlp } = require('ytdlp-nodejs');
 const path = require('path');
 const https = require('https');
 
@@ -39,8 +38,6 @@ try {
 } catch (e) {
     console.warn('[MAPPING WARN] No se pudo cargar mapping.json:', e.message);
 }
-
-const execAsync = promisify(exec);
 
 // Playwright es opcional: si no esta instalado o los navegadores no se
 // descargaron (npx playwright install chromium), el addon sigue funcionando
@@ -79,6 +76,12 @@ const YT_DLP = process.env.YT_DLP_PATH
         }
         return path.resolve(__dirname, fileName);
     })();
+const ytdlp = new YtDlp({ binaryPath: YT_DLP });
+ytdlp.updateYtDlpAsync({ preferBuiltIn: true }).then((upResult) => {
+    console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'binario local actualizado a' : 'nuevo binario descargado con'} la última versión (${upResult.version}) en ${upResult.binaryPath}`)
+}).catch(() => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp. Usando ruta ${YT_DLP}...`))
+    .finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
 // URL base del addon para reescribir playlists del proxy HLS.
@@ -149,13 +152,7 @@ const NETWORK_ENUM = Object.freeze({
 
 /** Extrae streams HLS de ok.ru via yt-dlp (JSON) y los enruta por el proxy. */
 async function extractOkRuStreams(iframeSrc) {
-    const { stdout, stderr } = await execAsync(
-        `"${YT_DLP}" -J --no-playlist "${iframeSrc}"`,
-        { timeout: 30000 }
-    );
-    if (stderr) console.warn('[YT-DLP WARN]', stderr.slice(0, 200));
-
-    const info = JSON.parse(stdout);
+    const info = await ytdlp.getFormatsAsync(iframeSrc);
     const seen = new Set();
 
     const native = (info.formats || [])
@@ -175,7 +172,8 @@ async function extractOkRuStreams(iframeSrc) {
                 notWebReady: true,
                 proxyHeaders: {
                     "request": OKRU_HEADERS
-                }
+                },
+                videoSize: f.filesize
             }
         }));
 
