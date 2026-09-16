@@ -177,6 +177,8 @@ async function extractOkRuStreams(iframeSrc) {
             }
         }));
 
+    seen.clear();
+
     const proxied = (info.formats || [])
         .filter(f => f.protocol === 'm3u8_native' && f.url && f.height)
         .sort((a, b) => (b.height || 0) - (a.height || 0))
