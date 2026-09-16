@@ -77,10 +77,11 @@ const YT_DLP = process.env.YT_DLP_PATH
         return path.resolve(__dirname, fileName);
     })();
 const ytdlp = new YtDlp({ binaryPath: YT_DLP });
-ytdlp.updateYtDlpAsync({ preferBuiltIn: true }).then((upResult) => {
-    console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'binario local actualizado a' : 'nuevo binario descargado con'} la última versión (${upResult.version}) en ${upResult.binaryPath}`)
-}).catch(() => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp. Usando ruta ${YT_DLP}...`))
-    .finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
+// const ytdlpUpdatePromise = ytdlp.updateYtDlpAsync({ preferBuiltIn: true }).then((upResult) => {
+//     console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'binario local actualizado a' : 'nuevo binario descargado con'} la última versión (${upResult.version}) en ${upResult.binaryPath}`)
+// }).catch(() => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp. Usando ruta ${YT_DLP}...`));
+const ytdlpUpdatePromise = Promise.resolve("YT-DLP update skipped (see https://github.com/yt-dlp/yt-dlp/issues/17585#issuecomment-5552918951)");
+ytdlpUpdatePromise.finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
@@ -837,14 +838,15 @@ builder.defineMetaHandler(async ({ id }) => {
         // video.released es obligatorio (ISO 8601); fabricamos fechas secuenciales validas
         const videos = episodes.map((ep, idx) => ({
             id: `lacart_${numId}:${ep.season}:${ep.episode}`,
-            title: ep.title,
+            title: ep.title.replace(/^Capitulo (\d+)-/, "").trim(),
             season: ep.season,
             episode: ep.episode,
             released: new Date(baseYear, 0, 1 + idx).toISOString(),
+            thumbnail: background
         }));
 
         return {
-            meta: { id, type: 'series', name, poster, background, description, videos, releaseInfo: `${baseYear}`, released: new Date(baseYear, 0, 1).toISOString(), genres, links, language }
+            meta: { id, type: 'series', name: name.replace(new RegExp(Object.keys(NETWORK_ENUM).join('|') + '$', 'i'), "").trim(), poster, background, description: description.replace(/^Reseña:/, "").trim(), videos, releaseInfo: `${baseYear}`, released: new Date(baseYear, 0, 1).toISOString(), genres, links, language }
         };
     } catch (e) {
         console.error('[META ERROR]', e.message);
