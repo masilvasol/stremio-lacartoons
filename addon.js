@@ -77,11 +77,28 @@ const YT_DLP = process.env.YT_DLP_PATH
         return path.resolve(__dirname, fileName);
     })();
 const ytdlp = new YtDlp({ binaryPath: YT_DLP });
-// const ytdlpUpdatePromise = ytdlp.updateYtDlpAsync({ preferBuiltIn: true }).then((upResult) => {
-//     console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'binario local actualizado a' : 'nuevo binario descargado con'} la última versión (${upResult.version}) en ${upResult.binaryPath}`)
-// }).catch(() => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp. Usando ruta ${YT_DLP}...`));
-const ytdlpUpdatePromise = Promise.resolve("YT-DLP update skipped (see https://github.com/yt-dlp/yt-dlp/issues/17585#issuecomment-5552918951)");
-ytdlpUpdatePromise.finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
+// const ytdlpUpdatePromise = ytdlp.updateYtDlpAsync({ preferBuiltIn: true })
+const firstBinaryPromise = (ytdlp.checkInstallation()) ? Promise.resolve('Installation detected') : ytdlp.updateYtDlpAsync({ preferBuiltIn: true })
+const ytdlpUpdatePromise = firstBinaryPromise.then(()=>{
+    return ytdlp.execAsync(' ', { updateTo: "InvalidUsernameException/yt-dlp@okru" }) //see https://github.com/yt-dlp/yt-dlp/issues/17585#issuecomment-5552918951
+    .catch((err) => {
+        const message = String(err?.message || err);
+        if (!message.includes('Automatically restarting into custom builds')) throw err;
+    }).then(() => {
+        console.log('[YT-DLP] Actualizado a parche concreto')
+        return ytdlp.getVersionAsync().then((version) => {
+            return {
+                method: 'built-in',
+                binaryPath: ytdlp.binaryPath,
+                version,
+            };
+        })
+    })
+})
+ytdlpUpdatePromise.then((upResult) => {
+    console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'Binario local actualizado a' : 'Nuevo binario descargado con'} la versión ${upResult.version} en ${upResult.binaryPath}`)
+}).catch((err) => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp: ${err}\nUsando ruta ${YT_DLP}...`))
+    .finally(() => (ytdlp.checkInstallation()) ? console.log('[YT-DLP] Instalación detectada y funcional') : console.error('[YT-DLP WARN] yt-dlp no está instalado o no es ejecutable. Algunos hosts de video no funcionarán'))
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 
