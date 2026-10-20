@@ -78,8 +78,8 @@ const YT_DLP = process.env.YT_DLP_PATH
         return path.resolve(__dirname, fileName);
     })();
 const ytdlp = new YtDlp({ binaryPath: YT_DLP });
-// const ytdlpUpdatePromise = ytdlp.updateYtDlpAsync({ preferBuiltIn: true })
-const firstBinaryPromise = (ytdlp.checkInstallation()) ? Promise.resolve('Installation detected') : ytdlp.updateYtDlpAsync({ preferBuiltIn: true })
+const ytdlpUpdatePromise = ytdlp.updateYtDlpAsync({ preferBuiltIn: true });
+/*const firstBinaryPromise = (ytdlp.checkInstallation()) ? Promise.resolve('Installation detected') : ytdlp.updateYtDlpAsync({ preferBuiltIn: true })
 const ytdlpUpdatePromise = firstBinaryPromise.then(()=>{
     return ytdlp.execAsync(' ', { updateTo: "InvalidUsernameException/yt-dlp@okru" }) //see https://github.com/yt-dlp/yt-dlp/issues/17585#issuecomment-5552918951
     .catch((err) => {
@@ -95,7 +95,7 @@ const ytdlpUpdatePromise = firstBinaryPromise.then(()=>{
             };
         })
     })
-})
+})*/
 ytdlpUpdatePromise.then((upResult) => {
     console.log(`[YT-DLP] ${(upResult.method !== 'download') ? 'Binario local actualizado a' : 'Nuevo binario descargado con'} la versión ${upResult.version} en ${upResult.binaryPath}`)
 }).catch((err) => console.warn(`[YT-DLP WARN] No se pudo actualizar yt-dlp: ${err}\nUsando ruta ${YT_DLP}...`))
