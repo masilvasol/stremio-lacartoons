@@ -1,3 +1,14 @@
+# Variables de entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Respaldo y despliegue local
+*.bundle
+*.bundle.lock
+setup.sh
+scripts/start-cloudflare.ps1
+
 # Ejecutables de FFmpeg
 ffmpeg.exe
 ffprobe.exe
@@ -11,8 +22,10 @@ playwright-report/
 blob-report/
 playwright/.local-browsers/
 
-# Registros de errores de Node/NPM
+# Registros
+*.log
 npm-debug.log*
+logs/
 
 # Archivos del sistema operativo
 .DS_Store

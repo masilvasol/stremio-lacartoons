@@ -1,0 +1,12 @@
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+node_modules
+npm-debug.log*
+*.log
+test
+*.bundle
+*.bundle.lock

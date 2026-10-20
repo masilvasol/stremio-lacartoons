@@ -1,10 +1,12 @@
 {
   "name": "lacartoons-addon",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Addon de Stremio para ver caricaturas clasicas de lacartoons.com en Espanol Latino.",
   "main": "addon.js",
   "scripts": {
-    "start": "node addon.js"
+    "start": "node addon.js",
+    "check": "node --check addon.js && node --check rpmvid.js",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "stremio",
@@ -17,7 +19,7 @@
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "axios": "^1.18.1",
+    "axios": "^1.20.0",
     "cheerio": "^1.2.0",
     "express": "^5.2.1",
     "playwright": "^1.48.0",
@@ -25,7 +27,19 @@
     "ytdlp-nodejs": "^3.4.5"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
+  },
+  "overrides": {
+    "stremio-addon-sdk": {
+      "router": {
+        "path-to-regexp": "0.1.13"
+      }
+    },
+    "inquirer": {
+      "external-editor": {
+        "tmp": "0.2.7"
+      }
+    }
   },
   "allowScripts": {
     "ytdlp-nodejs@3.4.5": true

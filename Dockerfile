@@ -54,13 +54,18 @@ WORKDIR /app
 
 # Copiar archivos
 COPY package*.json ./
+COPY .npmrc ./
 COPY addon.js ./
 COPY rpmvid.js ./
 COPY mapping.json ./
 COPY logo.png ./
+COPY yt-dlp_linux ./yt-dlp_linux
 
-# Instalar dependencias de Node
-RUN npm install --production
+# El binario Linux ya viene incluido; el addon lo actualiza al arrancar si hace falta.
+RUN chmod +x yt-dlp_linux
+
+# Instalar dependencias de Node respetando el lockfile
+RUN npm ci --omit=dev
 
 # Instalar Chromium de Playwright
 RUN npx playwright install chromium

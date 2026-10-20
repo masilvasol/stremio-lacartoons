@@ -4,6 +4,17 @@ Este proyecto es un complemento (addon) de código abierto para [Stremio](https:
 
 ---
 
+## 🌐 Instancia Pública
+
+Puedes usar la instancia oficial sin instalar nada:
+
+- **Manifest:** <https://stremio-lacartoons-h7ha.onrender.com/manifest.json>
+- **Instalar en Stremio:** <stremio:///addons/install?manifestUrl=https%3A%2F%2Fstremio-lacartoons-h7ha.onrender.com%2Fmanifest.json>
+
+> La instancia gratuita de Render puede tardar unos segundos en despertar tras un periodo de inactividad. Si no responde, usa la instalación local de más abajo.
+
+---
+
 ## ✨ Características
 
 * **Catálogo Completo:** Acceso indexado a series, temporadas y episodios directamente en la interfaz de Stremio.
@@ -20,6 +31,7 @@ Este addon se actualiza constantemente para mejorar la estabilidad, seguridad y 
 | **🛡️ Seguridad** | Parche **CVE-2024-45296** (`path-to-regexp`) | Protege el servidor de ataques de denegación de servicio (ReDoS). |
 | **💻 Multiplataforma** | Soporte nativo para **Linux y macOS** | Binarios `yt-dlp` incluidos para todos los sistemas operativos (PR #22). |
 | **🎬 Calidad de Video** | Soporte para **HLS nativo** y corrección de Stremio Web | Reproducción fluida en navegadores y resolución óptima (PR #15, #19). |
+| **🔊 Audio** | Pista española marcada como predeterminada en masters HLS | Evita episodios que se reproducen sin sonido en Stremio (#20). |
 | **🔍 Catálogo** | Filtros por género, cadena y sección "Recomendadas" | Búsqueda más precisa y descubrimiento de contenido (PR #11, #13). |
 | **⚙️ Estabilidad** | Actualización a **Node.js 20** y Docker | Mayor rendimiento del servidor y compatibilidad con entornos modernos. |
 | **🔗 Enlaces** | Uso de enlaces nativos de YouTube (sin proxy) | Carga más rápida y menor latencia en videos de YouTube (PR #7). |
@@ -30,9 +42,9 @@ Este addon se actualiza constantemente para mejorar la estabilidad, seguridad y 
 ## 🛠️ Requisitos Previos
 
 Antes de realizar la instalación, asegúrate de contar con los siguientes elementos en tu sistema:
-* **Node.js:** Versión 18 o superior recomendada.
+* **Node.js:** Versión 20 o superior.
 * **Git:** Configurado en tu entorno local.
-* **Binarios locales:** El ejecutable `yt-dlp.exe` debe estar ubicado en la raíz del proyecto para dar soporte al motor de extracción.
+* **Binarios locales:** Los ejecutables `yt-dlp.exe` (Windows), `yt-dlp_linux` (Linux) o `yt-dlp_macos` (macOS) ya están incluidos en el repositorio.
 
 ---
 
@@ -43,14 +55,15 @@ Sigue estos pasos desde tu terminal preferida (**PowerShell** o **Bash**) para d
 ### 1. Clonar el repositorio
 Navega hasta el directorio donde desees almacenar el proyecto y clona el código fuente:
 ```powershell
-git clone https://github.com
+git clone https://github.com/masilvasol/stremio-lacartoons.git
 cd stremio-lacartoons
 ```
 
-### 2. Instalar dependencias y binarios de automatización
-Este comando instalará los módulos del framework y ejecutará de forma automatizada la descarga del navegador Chromium headless requerido por el motor de Playwright:
+### 2. Instalar dependencias y Chromium
+El proyecto usa `npm ci` para respetar exactamente el `package-lock.json`. Después instala el navegador headless que necesita el fallback de Playwright:
 ```powershell
-npm install
+npm ci
+npx playwright install chromium
 ```
 
 ### 3. Iniciar el servidor local
@@ -59,8 +72,16 @@ Pon en marcha el entorno de desarrollo utilizando el script nativo configurado:
 npm start
 ```
 
+Si necesitas que los enlaces del proxy usen otra URL (por ejemplo, una IP de tu red local o un dominio público), define `PUBLIC_URL` antes de arrancar:
+```powershell
+$env:PUBLIC_URL = 'http://192.168.1.50:7000'
+npm start
+```
+
 Una vez iniciado, el addon expondrá una interfaz local en la dirección:  
-`http://127.0.0`
+`http://127.0.0.1:7000/manifest.json`
+
+El archivo `.env.example` documenta las variables disponibles (`PORT`, `PUBLIC_URL`, `BASE_URL`, `YT_DLP_PATH`). El addon no carga `.env` automáticamente; define esas variables en tu shell, en Docker o en el panel de Render.
 
 ---
 
@@ -69,7 +90,7 @@ Una vez iniciado, el addon expondrá una interfaz local en la dirección:
 1. Mantén la terminal con el comando de ejecución **activa**.
 2. Abre la aplicación de **Stremio** en tu computadora o en cualquier dispositivo dentro de tu misma red local.
 3. Dirígete a la sección de **Addons** (icono de la pieza de rompecabezas).
-4. Pega la URL local `http://127.0.0` en la barra de búsqueda superior.
+4. Pega la URL local `http://127.0.0.1:7000/manifest.json` en la barra de búsqueda superior.
 5. Haz clic en el botón verde **Instalar**.
 
 ---
