@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * LACartoons Stremio Addon - v1.0.0
+ * LACartoons Stremio Addon - v1.0.1
  * Scraper para lacartoons.com con catalogo completo,
  * temporadas multiples, ids de video conformes al protocolo Stremio,
  * y extraccion de video via yt-dlp con headers de Referer para ok.ru.
@@ -14,6 +14,7 @@ const cheerio = require('cheerio');
 const { YtDlp } = require('ytdlp-nodejs');
 const path = require('path');
 const https = require('https');
+const { version: ADDON_VERSION } = require('./package.json');
 
 // Módulo nativo para descifrar cubeembed / rpmvid
 const rpmvid = require('./rpmvid.js');
@@ -499,7 +500,7 @@ async function resolveViaPlaywright(pageUrl, referer) {
     return found;
 }
 
-async function extractGenericStreams(pageUrl, referer) {
+async function extractGenericStreams(pageUrl, referer, isRpmvid = false) {
     const found = await resolveViaPlaywright(pageUrl, referer);
     if (!found) return [];
 
@@ -527,7 +528,7 @@ async function extractGenericStreams(pageUrl, referer) {
         return [{
             name: 'LACartoons (proxy)',
             title: kind === 'm3u8' ? 'HD (auto)' : 'HD',
-            url: proxyUrl(found.url, kind, found.headers),
+            url: proxyUrl(found.url, kind, found.headers, isRpmvid),
             behaviorHints: {
                 bingeGroup: 'lacartoons-generic',
             },
@@ -795,7 +796,7 @@ async function getSeriesDetail(numId) {
 // ==================== Manifest ====================
 const builder = new addon.addonBuilder({
     id: 'org.lacartoons.addon',
-    version: '1.0.0',
+    version: ADDON_VERSION,
     name: 'LACartoons',
     description: 'Caricaturas y series animadas clasicas en Espanol Latino - lacartoons.com',
     logo: `https://raw.githubusercontent.com/masilvasol/stremio-lacartoons/refs/heads/main/logo.png`,
@@ -1036,7 +1037,7 @@ builder.defineStreamHandler(async ({ id }, req) => {
         // nuestros interceptores de red (route/request/response).
         const playwrightTarget = embedSrc || epUrl;
         console.log('[STREAM] Playwright target directo:', playwrightTarget);
-        const genericStreams = await extractGenericStreams(playwrightTarget, epUrl);
+        const genericStreams = await extractGenericStreams(playwrightTarget, epUrl, isRpmvid);
         if (!genericStreams.length) {
             console.warn('[STREAM] Playwright no encontro ninguna peticion de video en:', playwrightTarget);
             return { streams: [] };
@@ -1204,16 +1205,20 @@ app.get('/p/:enc', async (req, res) => {
         const ar = upstream.headers['accept-ranges'];
         if (ar) res.setHeader('Accept-Ranges', ar);
 
-        res.setHeader('Content-Type', ct || (raw.endsWith('.mp4') ? 'video/mp4' : 'video/mp2t'));
         let buf = Buffer.from(upstream.data);
 
-        // ===== DE-OFUSCACION DE CHUNKS =====
+        // ===== DETECCION Y DE-OFUSCACION DE CHUNKS =====
         // HACK: Hosts como rpmvid/show-sb alojan chunks de video en CDNs de imagenes
         // (ej. tiktokcdn.com) disfrazandolos con cabeceras PNG/JPG falsas. El
         // reproductor web las corta, pero Stremio falla al ver firmas invalidas.
         // Si no es un playlist, buscamos el inicio real del MPEG-TS (firma 0x47
         // repetida cada 188 bytes) y cortamos la basura inicial.
-        if (!isPlaylist && !ct.includes('mpegurl') && !raw.endsWith('.mp4') && buf.length > 376) {
+        const endsWithMp4 = /\.(mp4|m4s)(\?|$)/i.test(raw);
+        const isFmp4 = buf.length >= 12 && ['ftyp', 'styp', 'moof']
+            .includes(buf.subarray(4, 8).toString('ascii'));
+        let isMpegTs = false;
+
+        if (!isPlaylist && !ct.includes('mpegurl') && !endsWithMp4 && !isFmp4 && buf.length > 376) {
             const maxScan = Math.min(1024, buf.length - 189);
             for (let i = 0; i < maxScan; i++) {
                 if (buf[i] === 0x47 && buf[i + 188] === 0x47) {
@@ -1221,11 +1226,24 @@ app.get('/p/:enc', async (req, res) => {
                         console.log(`[PROXY] Cortados ${i} bytes de ofuscacion en el chunk.`);
                         buf = buf.subarray(i);
                     }
+                    isMpegTs = true;
                     break;
                 }
             }
         }
 
+        // Algunos CDN entregan MPEG-TS/fMP4 validos con Content-Type de imagen.
+        // Elegimos el tipo segun los bytes reales para no confundir a Stremio.
+        let outCt = ct;
+        if (isMpegTs || (buf.length >= 189 && buf[0] === 0x47 && buf[188] === 0x47)) {
+            outCt = 'video/mp2t';
+        } else if (endsWithMp4 || isFmp4) {
+            outCt = 'video/mp4';
+        } else if (!outCt || outCt.startsWith('image/')) {
+            outCt = 'application/octet-stream';
+        }
+
+        res.setHeader('Content-Type', outCt);
         res.setHeader('Content-Length', buf.length);
         return res.send(buf);
     } catch (e) {
@@ -1250,7 +1268,7 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`================================================`);
     console.log(`         LACartoons Addon Inicializado`);
-    console.log(`         Versión: v 1.0.0 (estable)`);
+    console.log(`         Versión: v${ADDON_VERSION}`);
     console.log(`         Puerto Activo: ${finalPort}`);
     console.log(`         URL Local: ${PUBLIC_URL}/manifest.json`);
     console.log(`================================================`);
