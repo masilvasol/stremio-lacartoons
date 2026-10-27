@@ -6,12 +6,12 @@ const mapping = require('../mapping.json');
 
 const entries = mapping.mappings || mapping;
 
-test('mapping.json contiene equivalencias validas', () => {
+test('mapping.json contiene equivalencias válidas', () => {
     const keys = Object.keys(entries);
-    assert.ok(keys.length > 0, 'mapping.json no debe estar vacio');
+    assert.ok(keys.length > 0, 'mapping.json no debe estar vacío');
 
     for (const key of keys) {
-        assert.match(key, /^lc_\d+$/, `clave invalida: ${key}`);
+        assert.match(key, /^lc_\d+$/, `clave inválida: ${key}`);
         const item = entries[key];
         assert.ok(item && (item.imdb || item.tmdb), `entrada sin IMDb/TMDB: ${key}`);
     }

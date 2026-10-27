@@ -13,7 +13,7 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 const { YtDlp } = require('ytdlp-nodejs');
 const path = require('path');
-const https = require('https');
+const { upstreamAgentFor, b64urlEncode, b64urlDecode, pickSafeHeaders, extractYouTubeStreams } = require('./utils.js');
 const { version: ADDON_VERSION } = require('./package.json');
 
 // Módulo nativo para descifrar cubeembed / rpmvid
@@ -122,19 +122,6 @@ const RPMVID_HEADERS = {
     'User-Agent': UA,
 };
 
-const insecureHttpsAgent = new https.Agent({ rejectUnauthorized: false, keepAlive: true });
-
-function upstreamAgentFor(url) {
-    try {
-        const host = new URL(url).hostname;
-        if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return insecureHttpsAgent;
-    } catch { /* ignore */ }
-    return undefined;
-}
-
-const b64urlEncode = s => Buffer.from(s, 'utf8').toString('base64url');
-const b64urlDecode = s => Buffer.from(s, 'base64url').toString('utf8');
-
 // Construye una URL del proxy HLS/MP4. `kind` es 'm3u8', 'ts' o 'mp4'.
 // `headers` viaja codificado junto con la URL, para que el proxy pueda
 // reenviar exactamente los headers que el host de origen exige (Referer,
@@ -142,20 +129,6 @@ const b64urlDecode = s => Buffer.from(s, 'base64url').toString('utf8');
 function proxyUrl(targetUrl, kind, headers, isRpmvid = false) {
     const payload = JSON.stringify({ u: targetUrl, h: headers || {}, r: isRpmvid ? 1 : 0 });
     return `${PUBLIC_URL}/p/${b64urlEncode(payload)}.${kind}`;
-}
-
-// Capturamos todos los headers que el navegador real envio, excepto los que
-// rompen la peticion (pseudo-headers HTTP/2 ocultos) o los que Node fetch 
-// gestiona por su cuenta (encoding, host, connection).
-function pickSafeHeaders(rawHeaders) {
-    const exclude = ['host', 'connection', 'content-length', 'accept-encoding', 'upgrade-insecure-requests'];
-    const out = {};
-    for (const k of Object.keys(rawHeaders || {})) {
-        const lower = k.toLowerCase();
-        if (lower.startsWith(':') || exclude.includes(lower)) continue;
-        out[k] = rawHeaders[k];
-    }
-    return out;
 }
 
 const NETWORK_ENUM = Object.freeze({
@@ -236,30 +209,6 @@ async function extractOkRuStreams(iframeSrc) {
         });
 
     return native.concat(proxied);
-}
-
-/** Extrae IDs de videos de YouTube de las URL y formatea los streams */
-async function extractYouTubeStreams(iframeSrc) {
-    try {
-        let ytId;
-        if (iframeSrc.trim().length === 11) { //just ytID
-            ytId = iframeSrc.trim();
-        } else {
-            const ytURL = new URL(iframeSrc);
-            ytId = ytURL.searchParams.get('v') || ytURL.pathname.split('/').pop();
-        }
-        return [{
-            name: 'LACartoons',
-            title: 'YouTube',
-            ytId,
-            behaviorHints: {
-                bingeGroup: 'lacartoons-yt',
-            },
-        }]
-    } catch (e) {
-        console.warn('[STREAM] URL de YouTube invalida:', iframeSrc);
-        return []
-    }
 }
 
 // ==================== Fallback generico via Playwright ====================
@@ -1037,7 +986,7 @@ builder.defineStreamHandler(async ({ id }, req) => {
         if (iframeSrc && !isRpmvid) {
             if (YT_HOSTS.some(h => iframeSrc.includes(h))) {
                 console.log('[STREAM] Extrayendo URL de YouTube...');
-                const streams = await extractYouTubeStreams(iframeSrc);
+                const streams = extractYouTubeStreams(iframeSrc);
                 if (streams.length) return { streams };
             } else {
                 console.log('[STREAM] Host conocido, usando yt-dlp...');
